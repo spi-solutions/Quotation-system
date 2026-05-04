@@ -1,0 +1,19 @@
+---
+description: Supabase is backend-only; never expose service role on the frontend.
+globs: 
+alwaysApply: true
+---
+
+# Supabase backend isolation
+
+- **`lib/db/supabase.ts`** exports `supabaseAdmin` (service role). It must **never** be imported in:
+  - Frontend components (React components that run in the browser)
+  - Client components (`"use client"`)
+  - Any file that is bundled for the client
+
+- **Allowed imports** of `lib/db/supabase` or `supabaseAdmin`:
+  - API routes (e.g. `app/api/**/route.ts` or `pages/api/**`)
+  - Server-side code (getServerSideProps, server actions, middleware that runs on server)
+  - Other server-only services under `lib/services` that are only used from API routes or server code
+
+- Frontend must **not** use any Supabase client. All Supabase access goes through your API routes; the API routes use `supabaseAdmin`.
