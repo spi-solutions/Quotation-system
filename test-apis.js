@@ -5,11 +5,26 @@
  * Requires: dev server running (npm run dev)
  * If dev runs on a different port: API_BASE=http://localhost:3001 node test-apis.js
  *
+ * Loads .env.local from project root (optional).
+ *
  * For all tests to pass:
- * 1. Run Supabase migrations and expose "app" schema in Supabase Dashboard → API settings
- * 2. Set .env.local: NEXT_PUBLIC_SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, SESSION_SECRET
- * 3. Admin tests will 403 unless you log in as a user with role=admin
+ * 1. Run Supabase migrations and set .env.local: NEXT_PUBLIC_SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, SESSION_SECRET
+ * 2. Create an admin (npm run create:admin) or set API_TEST_ADMIN_EMAIL + API_TEST_ADMIN_PASSWORD
+ *    (defaults to admin@quote.local / Admin@123 if unset — local smoke only).
  */
+const fs = require('fs');
+const path = require('path');
+const root = process.cwd();
+const envPath = path.join(root, '.env.local');
+if (fs.existsSync(envPath)) {
+  const content = fs.readFileSync(envPath, 'utf8');
+  content.split(/\r?\n/).forEach((line) => {
+    const trimmed = line.trim();
+    const m = trimmed.match(/^([^#=]+)=(.*)$/);
+    if (m) process.env[m[1].trim()] = m[2].trim();
+  });
+}
+
 const BASE = process.env.API_BASE || 'http://localhost:3000';
 const FETCH_TIMEOUT_MS = Number(process.env.FETCH_TIMEOUT_MS) || 65000;
 
@@ -64,10 +79,18 @@ async function run() {
     return opts;
   };
 
-  // 1. Auth signup
+  // 1. Auth signup (or login if user already exists from a prior run)
   let r = await request('/api/auth/signup', getOpts({ email: 'apitest@example.com', password: 'pass123' }));
   cookies = r.headers.get('set-cookie') || cookies;
-  assert(r.ok, 'POST /api/auth/signup', r.timeout ? '(timeout)' : (r.ok ? '' : (r.data?.error || r.status)));
+  const signupOk =
+    r.ok ||
+    (typeof r.data?.error === 'string' &&
+      r.data.error.toLowerCase().includes('already exists'));
+  assert(
+    signupOk,
+    'POST /api/auth/signup',
+    r.timeout ? '(timeout)' : r.ok ? '' : r.data?.error || r.status
+  );
   if (!r.ok && r.status === 500) {
     console.log('   (500: ensure app schema is created, exposed in Supabase API settings, and env vars set)');
     if (r.data && typeof r.data === 'object' && r.data.error) {
@@ -76,7 +99,7 @@ async function run() {
       if (r.data.cause) console.log('   Cause:', r.data.cause);
     } else if (r.text) console.log('   Response:', r.text.slice(0, 200));
   }
-  if (!r.ok && r.data?.error?.includes('already exists')) {
+  if (!r.ok && typeof r.data?.error === 'string' && r.data.error.includes('already exists')) {
     r = await request('/api/auth/login', getOpts({ email: 'apitest@example.com', password: 'pass123' }));
     cookies = r.headers.get('set-cookie') || cookies;
     assert(r.ok, 'POST /api/auth/login (existing user)', r.timeout ? '(timeout)' : '');
@@ -119,58 +142,100 @@ async function run() {
     if (r.data && typeof r.data === 'object' && r.data.error) console.log('   Error:', r.data.error);
   }
 
-  // 6. Quotes
-  r = await request('/api/quotes', { method: 'GET', headers: { Cookie: cookies } });
+  // 5b. Admin session for quote create + admin routes (POST /api/quotes is admin-only)
+  const adminEmail =
+    process.env.API_TEST_ADMIN_EMAIL ||
+    process.env.ADMIN_EMAIL ||
+    'admin@quote.local';
+  const adminPassword =
+    process.env.API_TEST_ADMIN_PASSWORD ||
+    process.env.ADMIN_PASSWORD ||
+    'Admin@123';
+  const adminLogin = await request(
+    '/api/auth/login',
+    getOpts({ email: adminEmail, password: adminPassword })
+  );
+  let adminCookies = '';
+  if (adminLogin.ok) {
+    adminCookies = adminLogin.headers.get('set-cookie') || '';
+    console.log('   (admin session:', adminEmail, ')');
+  } else {
+    console.log(
+      '   (admin login failed — quote POST / admin GETs may fail:',
+      adminLogin.data?.error || adminLogin.status,
+      ')'
+    );
+  }
+  const ac = adminCookies || cookies;
+
+  // 6. Quotes (requires admin cookie)
+  r = await request('/api/quotes', { method: 'GET', headers: { Cookie: ac } });
   assert(r.ok, 'GET /api/quotes', r.timeout ? '(timeout)' : (Array.isArray(r.data?.data) ? `(${r.data.data.length} items)` : r.data?.error));
 
-  const products = (await request('/api/products', { method: 'GET', headers: { Cookie: cookies } })).data?.data || [];
-  const fabricGroups = (await request('/api/fabric-groups', { method: 'GET', headers: { Cookie: cookies } })).data?.data || [];
+  const products = (await request('/api/products', { method: 'GET', headers: { Cookie: ac } })).data?.data || [];
+  const fabricGroups = (await request('/api/fabric-groups', { method: 'GET', headers: { Cookie: ac } })).data?.data || [];
   const productId = products[0]?.id;
   const fabricGroupId = fabricGroups[0]?.id;
   if (productId && fabricGroupId) {
-    r = await request('/api/quotes', getOpts({
-      customer: { name: 'Quote Customer', email: 'quotecust@test.com' },
-      additionalInfo: 'API smoke test quote',
-      etaText: 'Blinds 2-3 wks',
-      productId,
-      fabricGroupId,
-      inputWidth: 100,
-      inputDrop: 200,
-      quantity: 2,
-    }));
+    r = await request('/api/quotes', {
+      method: 'POST',
+      headers: { Cookie: ac, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        customer: { name: 'Quote Customer', email: 'quotecust@test.com' },
+        additionalInfo: 'API smoke test quote',
+        etaText: 'Blinds 2-3 wks',
+        productId,
+        fabricGroupId,
+        inputWidth: 100,
+        inputDrop: 200,
+        quantity: 2,
+      }),
+    });
     assert(r.ok, 'POST /api/quotes', r.timeout ? '(timeout)' : (r.data?.error || (r.data?.data?.quote?.id ? `(id ${r.data.data.quote.id})` : '')));
     const quoteId = r.data?.data?.quote?.id;
     if (quoteId) {
-      r = await request(`/api/quotes/${quoteId}`, { method: 'GET', headers: { Cookie: cookies } });
+      r = await request(`/api/quotes/${quoteId}`, { method: 'GET', headers: { Cookie: ac } });
       assert(r.ok, 'GET /api/quotes/:id', r.timeout ? '(timeout)' : r.data?.error);
-      r = await request(`/api/quotes/${quoteId}/status`, getOpts({ status: 'Sent' }, 'PATCH'));
+      // POST /api/quotes already sets Sent (or EmailFailed); next valid step is Approved, not Sent again
+      const currentStatus = r.data?.data?.status;
+      const nextStatus =
+        currentStatus === 'EmailFailed'
+          ? 'Sent'
+          : currentStatus === 'Sent' || currentStatus === 'EmailQueued'
+            ? 'Approved'
+            : 'Sent';
+      r = await request(`/api/quotes/${quoteId}/status`, {
+        method: 'PATCH',
+        headers: { Cookie: ac, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status: nextStatus }),
+      });
       assert(r.ok, 'PATCH /api/quotes/:id/status', r.timeout ? '(timeout)' : r.data?.error);
     }
   } else {
     assert(false, 'POST /api/quotes', '(skip: no products/fabric groups in DB)');
   }
 
-  // 7. Admin (403 if not admin)
-  r = await request('/api/admin/products', { method: 'GET', headers: { Cookie: cookies } });
-  assert(r.ok || r.status === 403, 'GET /api/admin/products', r.timeout ? '(timeout)' : (r.status === 403 ? '(403 not admin)' : (r.data?.error || '')));
+  // 7. Admin (expect 200 with admin session)
+  r = await request('/api/admin/products', { method: 'GET', headers: { Cookie: ac } });
+  assert(r.ok, 'GET /api/admin/products', r.timeout ? '(timeout)' : (r.data?.error || ''));
 
-  r = await request('/api/admin/fabric-groups', { method: 'GET', headers: { Cookie: cookies } });
-  assert(r.ok || r.status === 403, 'GET /api/admin/fabric-groups', r.timeout ? '(timeout)' : (r.status === 403 ? '(403)' : ''));
+  r = await request('/api/admin/fabric-groups', { method: 'GET', headers: { Cookie: ac } });
+  assert(r.ok, 'GET /api/admin/fabric-groups', r.timeout ? '(timeout)' : (r.data?.error || ''));
 
-  r = await request('/api/admin/widths', { method: 'GET', headers: { Cookie: cookies } });
-  assert(r.ok || r.status === 403, 'GET /api/admin/widths', r.timeout ? '(timeout)' : (r.status === 403 ? '(403)' : ''));
+  r = await request('/api/admin/widths', { method: 'GET', headers: { Cookie: ac } });
+  assert(r.ok, 'GET /api/admin/widths', r.timeout ? '(timeout)' : (r.data?.error || ''));
 
-  r = await request('/api/admin/drops', { method: 'GET', headers: { Cookie: cookies } });
-  assert(r.ok || r.status === 403, 'GET /api/admin/drops', r.timeout ? '(timeout)' : (r.status === 403 ? '(403)' : ''));
+  r = await request('/api/admin/drops', { method: 'GET', headers: { Cookie: ac } });
+  assert(r.ok, 'GET /api/admin/drops', r.timeout ? '(timeout)' : (r.data?.error || ''));
 
-  r = await request('/api/admin/pricing-grid', { method: 'GET', headers: { Cookie: cookies } });
-  assert(r.ok || r.status === 403, 'GET /api/admin/pricing-grid', r.timeout ? '(timeout)' : (r.status === 403 ? '(403)' : ''));
+  r = await request('/api/admin/pricing-grid', { method: 'GET', headers: { Cookie: ac } });
+  assert(r.ok, 'GET /api/admin/pricing-grid', r.timeout ? '(timeout)' : (r.data?.error || ''));
 
-  r = await request('/api/admin/costing-rules', { method: 'GET', headers: { Cookie: cookies } });
-  assert(r.ok || r.status === 403, 'GET /api/admin/costing-rules', r.timeout ? '(timeout)' : (r.status === 403 ? '(403)' : ''));
+  r = await request('/api/admin/costing-rules', { method: 'GET', headers: { Cookie: ac } });
+  assert(r.ok, 'GET /api/admin/costing-rules', r.timeout ? '(timeout)' : (r.data?.error || ''));
 
   // 8. Logout
-  r = await request('/api/auth/logout', { method: 'POST', headers: { Cookie: cookies } });
+  r = await request('/api/auth/logout', { method: 'POST', headers: { Cookie: ac } });
   assert(r.ok, 'POST /api/auth/logout', r.timeout ? '(timeout)' : '');
 
   console.log('\n--- Summary ---');

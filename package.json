@@ -8,7 +8,9 @@
     "start": "next start",
     "lint": "next lint",
     "migrate": "node scripts/migrate.js",
-    "export:catalog": "node scripts/export-catalog-to-sql.js"
+    "export:catalog": "node scripts/export-catalog-to-sql.js",
+    "verify:db": "node scripts/verify-supabase-connection.js",
+    "create:admin": "node scripts/create-admin-user.js"
   },
   "dependencies": {
     "@supabase/ssr": "^0.8.0",
