@@ -43,13 +43,15 @@ export async function getXeroAccessToken(): Promise<{
   const body = new URLSearchParams({
     grant_type: 'refresh_token',
     refresh_token: refreshToken,
-    client_id: clientId,
-    client_secret: clientSecret,
   })
+  const basic = Buffer.from(`${clientId}:${clientSecret}`).toString('base64')
 
   const res = await fetch('https://identity.xero.com/connect/token', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    headers: {
+      Authorization: `Basic ${basic}`,
+      'Content-Type': 'application/x-www-form-urlencoded',
+    },
     body,
   })
 

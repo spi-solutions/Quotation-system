@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getSessionCookieName, verifySession } from '@/lib/auth/session'
 
+const XERO_OAUTH_STATE_COOKIE = 'xero_oauth_state'
+
 function getRole(req: NextRequest): 'admin' | 'user' {
   return req.headers.get('x-user-role') === 'admin' ? 'admin' : 'user'
 }
@@ -25,7 +27,7 @@ export async function GET(req: NextRequest) {
   }
 
   const scope = 'openid profile email offline_access accounting.contacts accounting.transactions'
-  const state = `xero_${Date.now()}`
+  const state = crypto.randomUUID()
   const authorizeUrl =
     `https://login.xero.com/identity/connect/authorize` +
     `?response_type=code` +
@@ -34,6 +36,16 @@ export async function GET(req: NextRequest) {
     `&scope=${encodeURIComponent(scope)}` +
     `&state=${encodeURIComponent(state)}`
 
-  return NextResponse.redirect(authorizeUrl)
+  const res = NextResponse.redirect(authorizeUrl)
+  res.cookies.set({
+    name: XERO_OAUTH_STATE_COOKIE,
+    value: state,
+    httpOnly: true,
+    secure: process.env.NODE_ENV === 'production',
+    sameSite: 'lax',
+    path: '/api/xero/callback',
+    maxAge: 60 * 10,
+  })
+  return res
 }
 
