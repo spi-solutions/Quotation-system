@@ -26,7 +26,8 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: 'XERO_CLIENT_ID is not configured' }, { status: 500 })
   }
 
-  const scope = 'openid profile email offline_access accounting.contacts accounting.transactions'
+  // Keep scopes minimal to avoid unauthorized_client for apps without identity scopes enabled.
+  const scope = 'offline_access accounting.contacts accounting.transactions'
   const state = crypto.randomUUID()
   const authorizeUrl =
     `https://login.xero.com/identity/connect/authorize` +
