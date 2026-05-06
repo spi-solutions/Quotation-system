@@ -357,7 +357,7 @@ export async function syncApprovedQuoteToXero(quoteId: number): Promise<void> {
         /authorization/i.test(detail) ||
         /authorization/i.test(summary)
       const hint = unauthorized
-        ? ' Reconnect Xero with offline_access + accounting.contacts + accounting.transactions (enabled on the Xero app).'
+        ? ' Reconnect Xero with offline_access + accounting.contacts + accounting.invoices (granular scope for invoice APIs).'
         : ''
       throw new Error(String(msg) + hint)
     }
