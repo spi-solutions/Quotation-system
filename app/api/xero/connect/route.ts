@@ -1,7 +1,23 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getSessionCookieName, verifySession } from '@/lib/auth/session'
+import { createHmac, randomBytes } from 'crypto'
 
 const XERO_OAUTH_STATE_COOKIE = 'xero_oauth_state'
+const STATE_MAX_AGE_SECONDS = 60 * 10
+
+function getStateSigningSecret(): string {
+  return process.env.SESSION_SECRET || 'default-secret-change-in-production'
+}
+
+function createSignedOAuthState(): string {
+  const payload = {
+    nonce: randomBytes(16).toString('hex'),
+    iat: Date.now(),
+  }
+  const payloadB64 = Buffer.from(JSON.stringify(payload), 'utf8').toString('base64url')
+  const sig = createHmac('sha256', getStateSigningSecret()).update(payloadB64).digest('base64url')
+  return `${payloadB64}.${sig}`
+}
 
 function getRole(req: NextRequest): 'admin' | 'user' {
   return req.headers.get('x-user-role') === 'admin' ? 'admin' : 'user'
@@ -28,7 +44,11 @@ export async function GET(req: NextRequest) {
 
   // Keep scopes minimal to avoid unauthorized_client for apps without identity scopes enabled.
   const scope = 'offline_access accounting.contacts accounting.transactions'
-  const state = crypto.randomUUID()
+  const state = createSignedOAuthState()
+  console.info('[xero/oauth] generated state for connect', {
+    statePrefix: state.slice(0, 18),
+    stateLength: state.length,
+  })
   const authorizeUrl =
     `https://login.xero.com/identity/connect/authorize` +
     `?response_type=code` +
@@ -45,7 +65,12 @@ export async function GET(req: NextRequest) {
     secure: process.env.NODE_ENV === 'production',
     sameSite: 'lax',
     path: '/api/xero/callback',
-    maxAge: 60 * 10,
+    maxAge: STATE_MAX_AGE_SECONDS,
+  })
+  console.info('[xero/oauth] state cookie set for callback', {
+    cookieName: XERO_OAUTH_STATE_COOKIE,
+    path: '/api/xero/callback',
+    maxAgeSeconds: STATE_MAX_AGE_SECONDS,
   })
   return res
 }
