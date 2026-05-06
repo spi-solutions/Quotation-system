@@ -42,8 +42,10 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: 'XERO_CLIENT_ID is not configured' }, { status: 500 })
   }
 
-  // Keep scopes to the subset currently accepted by this Xero app.
-  const scope = 'offline_access accounting.contacts'
+  // Invoice sync needs transaction scope. Override via XERO_OAUTH_SCOPES if Xero rejects a scope.
+  const scope =
+    process.env.XERO_OAUTH_SCOPES?.trim() ||
+    'offline_access accounting.contacts accounting.transactions'
   const state = createSignedOAuthState()
   console.info('[xero/oauth] generated state for connect', {
     statePrefix: state.slice(0, 18),

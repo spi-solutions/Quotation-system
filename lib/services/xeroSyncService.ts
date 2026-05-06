@@ -344,12 +344,22 @@ export async function syncApprovedQuoteToXero(quoteId: number): Promise<void> {
         httpStatus: invRes.status,
         summary,
       })
+      const detail = String(invJson?.Detail ?? invJson?.Title ?? '')
       const msg =
         (invJson?.Elements as any)?.[0]?.ValidationErrors?.[0]?.Message ||
         invJson?.Message ||
         invJson?.Detail ||
         `Create invoice failed (${invRes.status})`
-      throw new Error(String(msg))
+      const unauthorized =
+        invRes.status === 401 ||
+        invRes.status === 403 ||
+        /authorization/i.test(String(msg)) ||
+        /authorization/i.test(detail) ||
+        /authorization/i.test(summary)
+      const hint = unauthorized
+        ? ' Reconnect Xero with offline_access + accounting.contacts + accounting.transactions (enabled on the Xero app).'
+        : ''
+      throw new Error(String(msg) + hint)
     }
 
     const invoiceId = (invJson?.Invoices as any)?.[0]?.InvoiceID as string | undefined
