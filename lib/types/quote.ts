@@ -1,3 +1,5 @@
+export type BlindType = 'blockout' | 'screen'
+
 export type QuoteStatus =
   | 'Draft'
   | 'EmailQueued'
@@ -48,6 +50,7 @@ export type QuoteItem = {
   quantity: number
   location_label: string
   location_other: string | null
+  blind_type?: BlindType
 }
 
 export type NewQuoteItem = Omit<QuoteItem, 'id'>

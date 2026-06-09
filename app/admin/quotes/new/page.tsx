@@ -21,11 +21,13 @@ import {
 
 type Product = { id: number; name: string; pricing_type: string }
 type FabricGroup = { id: number; group_number: number }
+type BlindType = 'blockout' | 'screen'
 
 type LineItem = {
   id: number
   productId: string
   fabricGroupId: string
+  blindType: BlindType
   inputWidth: string
   inputDrop: string
   quantity: string
@@ -36,11 +38,16 @@ type LineItem = {
 type PreparedItem = {
   productId: string
   fabricGroupId: string
+  blindType: BlindType
   inputWidth: string
   inputDrop: string
   quantity: string
   location: string
   locationOther: string
+}
+
+function blindTypeLabel(t: BlindType): string {
+  return t === 'screen' ? 'Screen' : 'Blockout (BO)'
 }
 
 type PreparedCustomRule = {
@@ -195,6 +202,7 @@ export default function AdminNewQuotePage() {
     etaText: 'Blinds 2-3 wks',
     location: '',
     locationOther: '',
+    blindType: 'blockout' as BlindType,
   })
   const [errors, setErrors] = useState<Record<string, string>>({})
   const [lineItems, setLineItems] = useState<LineItem[]>([])
@@ -302,6 +310,8 @@ export default function AdminNewQuotePage() {
               quantity: String(item.quantity != null && item.quantity >= 1 ? item.quantity : 1),
               location: item.location_label ?? 'Other',
               locationOther: item.location_other ?? '',
+              blindType:
+                (item as { blind_type?: BlindType }).blind_type === 'screen' ? 'screen' : 'blockout',
             }))
           )
         } else {
@@ -315,6 +325,7 @@ export default function AdminNewQuotePage() {
               quantity: '1',
               location: 'Other',
               locationOther: '',
+              blindType: 'blockout',
             },
           ])
         }
@@ -391,6 +402,9 @@ export default function AdminNewQuotePage() {
     if (form.location === 'Other' && !form.locationOther.trim()) {
       e.locationOther = 'Specify the other location'
     }
+    if (form.blindType !== 'blockout' && form.blindType !== 'screen') {
+      e.blindType = 'Select blockout or screen'
+    }
     setErrors((prev) => ({ ...prev, ...e }))
     setItemError(Object.keys(e).length ? 'Fix the line details before adding.' : '')
     return Object.keys(e).length === 0
@@ -406,6 +420,7 @@ export default function AdminNewQuotePage() {
       quantity: '1',
       location: '',
       locationOther: '',
+      blindType: 'blockout',
     }))
     setEditingItemId(null)
     setItemError('')
@@ -428,6 +443,7 @@ export default function AdminNewQuotePage() {
                 quantity: form.quantity,
                 location: form.location,
                 locationOther: form.locationOther,
+                blindType: form.blindType,
               }
             : item
         )
@@ -440,6 +456,7 @@ export default function AdminNewQuotePage() {
           id: nextId,
           productId: form.productId,
           fabricGroupId: form.fabricGroupId,
+          blindType: form.blindType,
           inputWidth: form.inputWidth,
           inputDrop: form.inputDrop,
           quantity: form.quantity,
@@ -462,6 +479,7 @@ export default function AdminNewQuotePage() {
       quantity: item.quantity,
       location: item.location,
       locationOther: item.locationOther,
+      blindType: item.blindType,
     }))
     setItemError('')
     setPreviewData(null)
@@ -484,15 +502,7 @@ export default function AdminNewQuotePage() {
     const okCustomer = validateCustomer()
     if (!okCustomer) return
 
-    let itemsToSend: {
-      productId: string
-      fabricGroupId: string
-      inputWidth: string
-      inputDrop: string
-      quantity: string
-      location: string
-      locationOther: string
-    }[]
+    let itemsToSend: PreparedItem[]
     if (lineItems.length === 0) {
       // If there are no line items yet but the user filled the current row, try to use it.
       if (!validateCurrentItem()) {
@@ -503,6 +513,7 @@ export default function AdminNewQuotePage() {
         {
           productId: form.productId,
           fabricGroupId: form.fabricGroupId,
+          blindType: form.blindType,
           inputWidth: form.inputWidth,
           inputDrop: form.inputDrop,
           quantity: form.quantity,
@@ -515,6 +526,7 @@ export default function AdminNewQuotePage() {
           id: 1,
           productId: form.productId,
           fabricGroupId: form.fabricGroupId,
+          blindType: form.blindType,
           inputWidth: form.inputWidth,
           inputDrop: form.inputDrop,
           quantity: form.quantity,
@@ -526,6 +538,7 @@ export default function AdminNewQuotePage() {
       itemsToSend = lineItems.map((item) => ({
         productId: item.productId,
         fabricGroupId: item.fabricGroupId,
+        blindType: item.blindType,
         inputWidth: item.inputWidth,
         inputDrop: item.inputDrop,
         quantity: item.quantity,
@@ -625,6 +638,7 @@ export default function AdminNewQuotePage() {
             quantity: Number(item.quantity),
             locationLabel: item.location,
             locationOther: item.location === 'Other' ? item.locationOther : null,
+            blindType: item.blindType,
           })),
           ...(prepared.customCostingRules &&
             prepared.customCostingRules.length > 0 && {
@@ -946,6 +960,23 @@ export default function AdminNewQuotePage() {
                     <p className={errorCls}>{errors.fabricGroupId}</p>
                   )}
                 </div>
+                <div>
+                  <label className={labelCls}>Blockout / Screen *</label>
+                  <select
+                    value={form.blindType}
+                    onChange={(e) =>
+                      setForm((f) => ({
+                        ...f,
+                        blindType: e.target.value as BlindType,
+                      }))}
+                    className={inputCls(!!errors.blindType)}
+                    disabled={submitting}
+                  >
+                    <option value="blockout">Blockout (BO)</option>
+                    <option value="screen">Screen</option>
+                  </select>
+                  {errors.blindType && <p className={errorCls}>{errors.blindType}</p>}
+                </div>
                 <div className="sm:col-span-2">
                   <label className={labelCls}>Location *</label>
                   <div className="grid gap-3 sm:grid-cols-[minmax(0,1.2fr)_minmax(0,1.6fr)]">
@@ -1105,6 +1136,7 @@ export default function AdminNewQuotePage() {
                           <th className={thCls}>#</th>
                           <th className={thCls}>Product</th>
                           <th className={thCls}>Fabric group</th>
+                          <th className={thCls}>BO / Screen</th>
                           <th className={thCls}>Location</th>
                           <th className={thCls}>Width</th>
                           <th className={thCls}>Drop</th>
@@ -1123,6 +1155,7 @@ export default function AdminNewQuotePage() {
                               <td className={tdCls}>
                                 {fabric ? `Group ${fabric.group_number}` : '—'}
                               </td>
+                              <td className={tdCls}>{item.blindType === 'screen' ? 'Screen' : 'BO'}</td>
                               <td className={tdCls}>
                                 {item.location === 'Other'
                                   ? item.locationOther || 'Other'

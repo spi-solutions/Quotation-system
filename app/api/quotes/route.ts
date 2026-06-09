@@ -119,6 +119,7 @@ export async function POST(req: NextRequest) {
             item.locationOther != null && String(item.locationOther).trim() !== ''
               ? String(item.locationOther)
               : null,
+          blindType: item.blindType === 'screen' ? 'screen' : 'blockout',
         }
       }),
       additionalInfo: String(body.additionalInfo || '').trim(),

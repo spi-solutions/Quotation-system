@@ -4,7 +4,18 @@
  */
 import fs from 'node:fs'
 import path from 'node:path'
-import { PDFDocument, StandardFonts, rgb, type PDFFont, type PDFPage } from 'pdf-lib'
+import {
+  PDFDocument,
+  StandardFonts,
+  clip,
+  endPath,
+  popGraphicsState,
+  pushGraphicsState,
+  rectangle,
+  rgb,
+  type PDFFont,
+  type PDFPage,
+} from 'pdf-lib'
 import fontkit from '@pdf-lib/fontkit'
 import * as quoteRepository from '@/lib/repositories/quoteRepository'
 import * as customerRepository from '@/lib/repositories/customerRepository'
@@ -54,8 +65,15 @@ const GROUP_BG = rgb(0.878, 0.859, 0.918)
 const RED = rgb(0.82, 0.1, 0.1)
 
 const LOGO_TARGET_HEIGHT = 70
+/** Left purple icon only (full PNG includes text we draw separately). */
+const LOGO_ICON_SIZE = 58
+const BRAND_NAME_SIZE = 14
+const BRAND_TAGLINE_SIZE = 12
+const BRAND_TEXT_X_OFFSET = 8
 const CONTACT_FONT_SIZE = 8
 const CONTACT_LINE_GAP = 11
+/** Uniform inset for right-aligned contact block (matches reference). */
+const CONTACT_RIGHT_PAD = 10
 
 const CUSTOMER_ROW_H = 20
 const CUSTOMER_GRID_H = CUSTOMER_ROW_H * 3
@@ -170,14 +188,21 @@ function lineKind(productName: string): 'blockout' | 'screen' {
   return 'blockout'
 }
 
-function fabricLabel(
-  fabric: { group_number: number } | null,
-  product: { name: string } | null
-): string {
-  const pn = product?.name?.trim() ?? ''
-  if (pn.length > 0) return pn.slice(0, 56)
+function fabricGroupLabel(fabric: { group_number: number } | null): string {
   if (fabric) return `Group ${fabric.group_number}`
   return '—'
+}
+
+function blindTypeFromItem(
+  blindType: string | null | undefined,
+  productName: string
+): 'blockout' | 'screen' {
+  if (blindType === 'screen' || blindType === 'blockout') return blindType
+  return lineKind(productName)
+}
+
+function boSheerDisplay(kind: 'blockout' | 'screen'): string {
+  return kind === 'screen' ? 'Screen' : 'BO'
 }
 
 function clipToWidth(text: string, maxWidth: number, size: number, font: PDFFont): string {
@@ -239,16 +264,42 @@ function drawPriceInCell(
 
 function drawHeader(ctx: PdfLayoutContext, page: PDFPage, yStart: number): number {
   const { fonts, logoImage, logoDims } = ctx
-  const { font, fontBold } = fonts
-  let y = yStart
+  const { font, fontBold, fontOblique } = fonts
+  const y = yStart
+  const iconBottom = y - LOGO_ICON_SIZE
 
+  page.pushOperators(
+    pushGraphicsState(),
+    rectangle(CONTENT_LEFT, iconBottom, LOGO_ICON_SIZE, LOGO_ICON_SIZE),
+    clip(),
+    endPath()
+  )
   page.drawImage(logoImage, {
     x: CONTENT_LEFT,
     y: y - logoDims.height,
     width: logoDims.width,
     height: logoDims.height,
   })
+  page.pushOperators(popGraphicsState())
 
+  const textX = CONTENT_LEFT + LOGO_ICON_SIZE + BRAND_TEXT_X_OFFSET
+  const nameY = y - 20
+  page.drawText(COMPANY.displayName, {
+    x: textX,
+    y: nameY,
+    size: BRAND_NAME_SIZE,
+    font: fontBold,
+    color: BLACK,
+  })
+  page.drawText(COMPANY.tagline, {
+    x: textX,
+    y: nameY - 15,
+    size: BRAND_TAGLINE_SIZE,
+    font: fontOblique,
+    color: PURPLE,
+  })
+
+  const contactRight = CONTENT_RIGHT - CONTACT_RIGHT_PAD
   const contactLines = [
     COMPANY.legalName,
     COMPANY.phone,
@@ -263,7 +314,7 @@ function drawHeader(ctx: PdfLayoutContext, page: PDFPage, yStart: number): numbe
     const lineFont = isLegalName ? fontBold : font
     const tw = lineFont.widthOfTextAtSize(line, CONTACT_FONT_SIZE)
     page.drawText(line, {
-      x: CONTENT_RIGHT - tw,
+      x: contactRight - tw,
       y: cy,
       size: CONTACT_FONT_SIZE,
       font: lineFont,
@@ -272,7 +323,8 @@ function drawHeader(ctx: PdfLayoutContext, page: PDFPage, yStart: number): numbe
     cy -= CONTACT_LINE_GAP
   }
 
-  const headerBottom = Math.min(y - logoDims.height, cy) - 6
+  const brandBottom = nameY - 15 - BRAND_TAGLINE_SIZE
+  const headerBottom = Math.min(iconBottom, brandBottom, cy) - 6
   return headerBottom
 }
 
@@ -802,15 +854,14 @@ export async function generateQuotePdfBytes(quoteId: number): Promise<Uint8Array
       const qty = Math.max(1, Math.floor(Number(item.quantity)) || 1)
       const locationText = qty > 1 ? `${baseLoc} (×${qty})` : baseLoc
       const typeText = product?.name?.includes('Roller') ? 'Roller Blind' : product?.name ?? 'Roller Blind'
-      const kind = lineKind(product?.name ?? '')
-      const boSheer = kind === 'screen' ? 'Screen' : 'BO'
+      const kind = blindTypeFromItem(item.blind_type, product?.name ?? '')
       return {
         index: idx + 1,
         location: locationText,
         type: typeText.slice(0, 40),
         inOut: 'IN',
-        boSheer,
-        fabric: fabricLabel(fabric ?? null, product ?? null),
+        boSheer: boSheerDisplay(kind),
+        fabric: fabricGroupLabel(fabric ?? null),
         price: fmtMoney(Number(item.subtotal)),
         kind,
       }
@@ -823,8 +874,8 @@ export async function generateQuotePdfBytes(quoteId: number): Promise<Uint8Array
         location: 'As specified',
         type: 'Roller Blind',
         inOut: 'IN',
-        boSheer: kind === 'screen' ? 'Screen' : 'BO',
-        fabric: fabricLabel(headerFabricGroup ?? null, headerProduct ?? null),
+        boSheer: boSheerDisplay(kind),
+        fabric: fabricGroupLabel(headerFabricGroup ?? null),
         price: fmtMoney(Number(quote.subtotal)),
         kind,
       },

@@ -1,5 +1,5 @@
 import type { Customer, NewCustomer } from '../types/customer'
-import type { NewQuote, Quote, QuoteItem, NewQuoteItem } from '../types/quote'
+import type { BlindType, NewQuote, Quote, QuoteItem, NewQuoteItem } from '../types/quote'
 import type { PricingResult } from '../types/pricing'
 import * as customerRepository from '../repositories/customerRepository'
 import * as quoteRepository from '../repositories/quoteRepository'
@@ -37,6 +37,7 @@ export type CreateQuoteItemInput = {
   quantity: number
   locationLabel: string
   locationOther?: string | null
+  blindType?: BlindType
 }
 
 export type CreateQuoteInput = {
@@ -215,12 +216,24 @@ export async function createQuote(
       quantity: item.quantity,
       location_label: item.locationLabel,
       location_other: item.locationOther ?? null,
+      blind_type: item.blindType === 'screen' ? 'screen' : 'blockout',
     }
   })
 
   const createdItems: QuoteItem[] = []
   for (const payload of newItems) {
-    const created = await quoteItemRepository.create(payload)
+    let created: QuoteItem
+    try {
+      created = await quoteItemRepository.create(payload)
+    } catch (error: unknown) {
+      const msg = error instanceof Error ? error.message.toLowerCase() : ''
+      if (msg.includes('blind_type') && msg.includes('column')) {
+        const { blind_type: _omit, ...legacy } = payload as NewQuoteItem & { blind_type?: BlindType }
+        created = await quoteItemRepository.create(legacy as NewQuoteItem)
+      } else {
+        throw error
+      }
+    }
     createdItems.push(created)
   }
 
