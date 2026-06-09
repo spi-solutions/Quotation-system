@@ -1,4 +1,4 @@
-import type { PricingResult } from '../types/pricing'
+import type { CostingRuleBreakdownLine, PricingResult } from '../types/pricing'
 import * as widthRepository from '../repositories/widthRepository'
 import * as dropRepository from '../repositories/dropRepository'
 import * as pricingGridRepository from '../repositories/pricingGridRepository'
@@ -50,31 +50,38 @@ export async function calculatePricing(
   /**
    * Costing sheet rules (table + custom overrides). Rows named "GST" are skipped — the 10% on base is applied in code first.
    */
-  const rules = tableRules
-    .filter((r) => r.rule_name.trim().toLowerCase() !== 'gst')
-    .map((r) => {
-      const key = `${r.rule_name}|${r.rule_type}`
-      const override = customMap.get(key)
-      return {
-        rule_type: r.rule_type,
-        value: override !== undefined ? override : Number(r.value),
-      }
-    })
+  const applicableRules = tableRules.filter((r) => r.rule_name.trim().toLowerCase() !== 'gst')
 
   // 1) Base price from grid, then 10% GST on that base first (e.g. 39 → +3.90 → 42.90)
-  let subtotal = roundTo2(baseRow.base_price * 1.1)
+  const baseWithGst = roundTo2(baseRow.base_price * 1.1)
+  let running = baseWithGst
+  const ruleBreakdown: CostingRuleBreakdownLine[] = []
 
   // 2) Remaining costing rules (rental, installation, delivery, etc.)
-  for (const rule of rules) {
-    if (rule.rule_type === 'percentage') {
-      subtotal += (subtotal * rule.value) / 100
-    } else if (rule.rule_type === 'fixed') {
-      subtotal += rule.value
+  for (const r of applicableRules) {
+    const key = `${r.rule_name}|${r.rule_type}`
+    const override = customMap.get(key)
+    const value = override !== undefined ? override : Number(r.value)
+    const source = override !== undefined ? ('custom' as const) : ('table' as const)
+    let amountAdded = 0
+    if (r.rule_type === 'percentage') {
+      amountAdded = roundTo2((running * value) / 100)
+    } else if (r.rule_type === 'fixed') {
+      amountAdded = roundTo2(value)
     }
+    running = roundTo2(running + amountAdded)
+    ruleBreakdown.push({
+      ruleName: r.rule_name,
+      ruleType: r.rule_type,
+      value,
+      source,
+      amountAdded,
+      runningSubtotal: running,
+    })
   }
 
   // Line amount before quote-level GST; quoteService adds the second 10% on the bill total.
-  const subtotalExGst = roundTo2(subtotal)
+  const subtotalExGst = running
 
   return {
     fabricGroupId,
@@ -87,6 +94,16 @@ export async function calculatePricing(
     subtotal: subtotalExGst,
     gst: 0,
     finalTotal: subtotalExGst,
+    costingBreakdown: {
+      inputWidth,
+      inputDrop,
+      roundedWidth: width.width_value,
+      roundedDrop: drop.drop_value,
+      basePrice: baseRow.base_price,
+      baseWithGst,
+      rules: ruleBreakdown,
+      unitSubtotalExGst: subtotalExGst,
+    },
   }
 }
 

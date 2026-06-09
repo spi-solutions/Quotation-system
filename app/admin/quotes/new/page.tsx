@@ -62,6 +62,26 @@ type QuotePreviewData = {
   customCostingRules?: PreparedCustomRule[]
 }
 
+type CostingRuleBreakdownLine = {
+  ruleName: string
+  ruleType: string
+  value: number
+  source: 'table' | 'custom'
+  amountAdded: number
+  runningSubtotal: number
+}
+
+type PricingCostingBreakdown = {
+  inputWidth: number
+  inputDrop: number
+  roundedWidth: number
+  roundedDrop: number
+  basePrice: number
+  baseWithGst: number
+  rules: CostingRuleBreakdownLine[]
+  unitSubtotalExGst: number
+}
+
 type QuotePricingPreview = {
   lines: {
     lineNumber: number
@@ -69,14 +89,73 @@ type QuotePricingPreview = {
     subtotal: number
     gst: number
     finalTotal: number
+    costingBreakdown: PricingCostingBreakdown
+    unitSubtotalExGst: number
   }[]
   subtotal: number
   gst: number
   finalTotal: number
 }
 
+function formatRuleValue(ruleType: string, value: number): string {
+  if (ruleType === 'percentage') return `${value}%`
+  return `$${value.toFixed(2)}`
+}
+
 const emailRe = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 const PHONE_CODES = ['+61', '+91', '+1', '+64'] as const
+
+const QUOTE_LOCATION_OPTIONS = [
+  'Master BR W1',
+  'Master BR W2',
+  'Master BR W3',
+  'Master BR W4',
+  'Master BR W5',
+  'Ens W1',
+  'Ens W2',
+  'WIR W1',
+  'WIR W2',
+  'WIR W3',
+  'BR1 W1',
+  'BR1 W2',
+  'BR2 W1',
+  'BR2 W2',
+  'BR3 W1',
+  'BR3 W2',
+  'BR4 W1',
+  'BR4 W2',
+  'BR5 W1',
+  'BR5 W2',
+  'Bath W1',
+  'Bath W2',
+  'Kitchen W1',
+  'Kitchen W2',
+  'Meals W1',
+  'Meals W2',
+  'Meals W3',
+  'Meals W4',
+  'Meals sliding',
+  'Family W1',
+  'Family W2',
+  'Family W3',
+  'Family W4',
+  'Family Sliding',
+  'Stacker Door 1',
+  'Stacker Door 2',
+  'Laundry W1',
+  'Laundry Door',
+  'Butlers W1',
+  'Power Room 1',
+  'Study W1',
+  'Study W2',
+  'Rumpus W1',
+  'Rumpus W2',
+  'Void W1',
+  'Void W2',
+  'Stairs',
+  'Lounge W1',
+  'Lounge W2',
+] as const
 
 function splitPhoneWithCode(phone: string | null | undefined): {
   phoneCode: string
@@ -867,6 +946,44 @@ export default function AdminNewQuotePage() {
                     <p className={errorCls}>{errors.fabricGroupId}</p>
                   )}
                 </div>
+                <div className="sm:col-span-2">
+                  <label className={labelCls}>Location *</label>
+                  <div className="grid gap-3 sm:grid-cols-[minmax(0,1.2fr)_minmax(0,1.6fr)]">
+                    <select
+                      value={form.location}
+                      onChange={(e) =>
+                        setForm((f) => ({
+                          ...f,
+                          location: e.target.value,
+                          locationOther: e.target.value === 'Other' ? f.locationOther : '',
+                        }))}
+                      className={inputCls(!!errors.location)}
+                      disabled={submitting}
+                    >
+                      <option value="">Select location</option>
+                      {QUOTE_LOCATION_OPTIONS.map((loc) => (
+                        <option key={loc} value={loc}>
+                          {loc}
+                        </option>
+                      ))}
+                      <option value="Other">Other</option>
+                    </select>
+                    <input
+                      type="text"
+                      value={form.locationOther}
+                      onChange={(e) =>
+                        setForm((f) => ({
+                          ...f,
+                          locationOther: e.target.value,
+                        }))}
+                      className={inputCls(!!errors.locationOther)}
+                      placeholder="If 'Other', specify (e.g. Kitchen window)"
+                      disabled={submitting || form.location !== 'Other'}
+                    />
+                  </div>
+                  {errors.location && <p className={errorCls}>{errors.location}</p>}
+                  {errors.locationOther && <p className={errorCls}>{errors.locationOther}</p>}
+                </div>
                 <div>
                   <label className={labelCls}>Width *</label>
                   <input
@@ -922,41 +1039,6 @@ export default function AdminNewQuotePage() {
                   {errors.quantity && (
                     <p className={errorCls}>{errors.quantity}</p>
                   )}
-                </div>
-                <div className="sm:col-span-2">
-                  <label className={labelCls}>Location *</label>
-                  <div className="grid gap-3 sm:grid-cols-[minmax(0,1.2fr)_minmax(0,1.6fr)]">
-                    <select
-                      value={form.location}
-                      onChange={(e) =>
-                        setForm((f) => ({
-                          ...f,
-                          location: e.target.value,
-                          locationOther: e.target.value === 'Other' ? f.locationOther : '',
-                        }))}
-                      className={inputCls(!!errors.location)}
-                      disabled={submitting}
-                    >
-                      <option value="">Select location</option>
-                      <option value="Hall window">Hall window</option>
-                      <option value="Bedroom window">Bedroom window</option>
-                      <option value="Other">Other</option>
-                    </select>
-                    <input
-                      type="text"
-                      value={form.locationOther}
-                      onChange={(e) =>
-                        setForm((f) => ({
-                          ...f,
-                          locationOther: e.target.value,
-                        }))}
-                      className={inputCls(!!errors.locationOther)}
-                      placeholder="If 'Other', specify (e.g. Kitchen window)"
-                      disabled={submitting || form.location !== 'Other'}
-                    />
-                  </div>
-                  {errors.location && <p className={errorCls}>{errors.location}</p>}
-                  {errors.locationOther && <p className={errorCls}>{errors.locationOther}</p>}
                 </div>
               </div>
 
@@ -1023,10 +1105,10 @@ export default function AdminNewQuotePage() {
                           <th className={thCls}>#</th>
                           <th className={thCls}>Product</th>
                           <th className={thCls}>Fabric group</th>
+                          <th className={thCls}>Location</th>
                           <th className={thCls}>Width</th>
                           <th className={thCls}>Drop</th>
                           <th className={thCls}>Qty</th>
-                          <th className={thCls}>Location</th>
                           <th className={thCls + ' text-right'}>Actions</th>
                         </tr>
                       </thead>
@@ -1041,14 +1123,14 @@ export default function AdminNewQuotePage() {
                               <td className={tdCls}>
                                 {fabric ? `Group ${fabric.group_number}` : '—'}
                               </td>
-                              <td className={tdCls}>{item.inputWidth}</td>
-                              <td className={tdCls}>{item.inputDrop}</td>
-                              <td className={tdCls}>{item.quantity}</td>
                               <td className={tdCls}>
                                 {item.location === 'Other'
                                   ? item.locationOther || 'Other'
                                   : item.location || '—'}
                               </td>
+                              <td className={tdCls}>{item.inputWidth}</td>
+                              <td className={tdCls}>{item.inputDrop}</td>
+                              <td className={tdCls}>{item.quantity}</td>
                               <td className={tdCls + ' text-right'}>
                                 <div className="inline-flex items-center gap-2">
                                   <button
@@ -1206,6 +1288,117 @@ export default function AdminNewQuotePage() {
                     </span>
                   </p>
                 </div>
+
+                <div className="mt-5 rounded-xl border border-amber-200 bg-amber-50/50 p-4">
+                  <p className="text-xs font-semibold uppercase tracking-[0.12em] text-amber-800">
+                    Internal costing sheet
+                  </p>
+                  <p className="mt-1 text-xs text-amber-900/80">
+                    Not shown on the customer PDF — for admin review only.
+                  </p>
+                  {previewData.customCostingRules && previewData.customCostingRules.length > 0 && (
+                    <div className="mt-3 rounded-lg border border-amber-200 bg-white/80 p-3 text-xs text-slate-700">
+                      <p className="font-semibold text-slate-900">Custom overrides on this quote</p>
+                      <ul className="mt-2 list-disc space-y-1 pl-4">
+                        {previewData.customCostingRules.map((r) => (
+                          <li key={`${r.ruleName}-${r.ruleType}`}>
+                            {r.ruleName} ({r.ruleType}): {formatRuleValue(r.ruleType, r.value)}
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                  <div className="mt-4 space-y-4">
+                    {previewPricing.lines.map((line, idx) => {
+                      const item = previewData.items[idx]
+                      const product = products.find((p) => String(p.id) === item?.productId)
+                      const fabric = fabricGroups.find((g) => String(g.id) === item?.fabricGroupId)
+                      const b = line.costingBreakdown
+                      if (!b) return null
+                      return (
+                        <div
+                          key={line.lineNumber}
+                          className="rounded-lg border border-amber-100 bg-white p-3 text-xs text-slate-700"
+                        >
+                          <p className="font-semibold text-slate-900">
+                            Line {line.lineNumber}
+                            {product?.name ? ` — ${product.name}` : ''}
+                            {fabric ? ` · Fabric group ${fabric.group_number}` : ''}
+                            {line.quantity > 1 ? ` · Qty ${line.quantity}` : ''}
+                          </p>
+                          <dl className="mt-2 grid gap-1 sm:grid-cols-2">
+                            <div>
+                              <dt className="text-slate-500">Entered size</dt>
+                              <dd className="font-medium text-slate-900">
+                                {b.inputWidth} × {b.inputDrop} mm
+                              </dd>
+                            </div>
+                            <div>
+                              <dt className="text-slate-500">Grid (nearest)</dt>
+                              <dd className="font-medium text-slate-900">
+                                {b.roundedWidth} × {b.roundedDrop} mm
+                              </dd>
+                            </div>
+                            <div>
+                              <dt className="text-slate-500">Base grid price</dt>
+                              <dd className="font-medium text-slate-900">${b.basePrice.toFixed(2)}</dd>
+                            </div>
+                            <div>
+                              <dt className="text-slate-500">Base + 10% GST</dt>
+                              <dd className="font-medium text-slate-900">${b.baseWithGst.toFixed(2)}</dd>
+                            </div>
+                          </dl>
+                          {b.rules.length > 0 ? (
+                            <table className="mt-3 min-w-full border-collapse text-xs">
+                              <thead>
+                                <tr className="border-b border-slate-200 text-left text-slate-500">
+                                  <th className="py-1 pr-2 font-medium">Rule</th>
+                                  <th className="py-1 pr-2 font-medium">Type</th>
+                                  <th className="py-1 pr-2 font-medium">Value</th>
+                                  <th className="py-1 pr-2 font-medium">Source</th>
+                                  <th className="py-1 pr-2 text-right font-medium">Added</th>
+                                  <th className="py-1 text-right font-medium">Running</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {b.rules.map((r) => (
+                                  <tr key={`${r.ruleName}-${r.ruleType}`} className="border-b border-slate-100">
+                                    <td className="py-1 pr-2">{r.ruleName}</td>
+                                    <td className="py-1 pr-2 capitalize">{r.ruleType}</td>
+                                    <td className="py-1 pr-2">{formatRuleValue(r.ruleType, r.value)}</td>
+                                    <td className="py-1 pr-2">
+                                      {r.source === 'custom' ? (
+                                        <span className="font-medium text-amber-800">Custom</span>
+                                      ) : (
+                                        'Table'
+                                      )}
+                                    </td>
+                                    <td className="py-1 pr-2 text-right">
+                                      {r.amountAdded >= 0 ? '+' : ''}
+                                      ${r.amountAdded.toFixed(2)}
+                                    </td>
+                                    <td className="py-1 text-right">${r.runningSubtotal.toFixed(2)}</td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          ) : (
+                            <p className="mt-2 text-slate-500">No costing rules applied for this product.</p>
+                          )}
+                          <p className="mt-2 text-right font-medium text-slate-900">
+                            Unit subtotal (ex quote GST): ${b.unitSubtotalExGst.toFixed(2)}
+                            {line.quantity > 1 && (
+                              <span className="ml-2 font-normal text-slate-600">
+                                × {line.quantity} = ${line.subtotal.toFixed(2)} line subtotal
+                              </span>
+                            )}
+                          </p>
+                        </div>
+                      )
+                    })}
+                  </div>
+                </div>
+
                 <p className="mt-3 text-xs text-slate-500">
                   If you edit anything above, click <strong>Review quote</strong> again before confirming.
                 </p>

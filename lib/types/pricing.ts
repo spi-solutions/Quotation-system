@@ -29,6 +29,28 @@ export type CostingRule = {
   value: number
 }
 
+export type CostingRuleBreakdownLine = {
+  ruleName: string
+  ruleType: string
+  value: number
+  /** Whether value came from costing_rules table or a per-quote custom override */
+  source: 'table' | 'custom'
+  amountAdded: number
+  runningSubtotal: number
+}
+
+export type PricingCostingBreakdown = {
+  inputWidth: number
+  inputDrop: number
+  roundedWidth: number
+  roundedDrop: number
+  basePrice: number
+  /** Base grid price + 10% GST applied in code before costing rules */
+  baseWithGst: number
+  rules: CostingRuleBreakdownLine[]
+  unitSubtotalExGst: number
+}
+
 export type PricingResult = {
   fabricGroupId: number
   productId: number
@@ -40,5 +62,6 @@ export type PricingResult = {
   subtotal: number
   gst: number
   finalTotal: number
+  costingBreakdown: PricingCostingBreakdown
 }
 

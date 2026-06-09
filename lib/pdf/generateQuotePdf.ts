@@ -1,10 +1,10 @@
 /**
  * Shared quotation PDF generation (used by API route and email attachment).
- * Layout aligned with SP Interior Solutions quotation: p.1 header + lines + totals, p.2 payment + terms.
+ * Layout reproduced from SP Interior Solutions reference quotation (A4 portrait).
  */
 import fs from 'node:fs'
 import path from 'node:path'
-import { PDFDocument, StandardFonts, rgb, type PDFPage } from 'pdf-lib'
+import { PDFDocument, StandardFonts, rgb, type PDFFont, type PDFPage } from 'pdf-lib'
 import fontkit from '@pdf-lib/fontkit'
 import * as quoteRepository from '@/lib/repositories/quoteRepository'
 import * as customerRepository from '@/lib/repositories/customerRepository'
@@ -27,47 +27,95 @@ export const COMPANY = {
   bankName: 'Commonwealth Bank',
 }
 
-const BLACK = rgb(0, 0, 0)
-/** Brand purple close to SP Interior reference PDF / site tone. */
-const PURPLE = rgb(0.361, 0.176, 0.51)
-const GRAY_BG = rgb(0.92, 0.92, 0.94)
-const RED = rgb(0.75, 0.12, 0.12)
-
+/** A4 portrait (pt). */
 const A4_W = 595
 const A4_H = 842
-/** Side inset for header / customer / terms (matches reference quotation PDF ≈ 55 pt). */
-const SIDE_MARGIN = 38
-/** Top inset for first header line (reference PDF ≈ 65 pt from top). */
-const TOP_MARGIN = 38
-/** Ruled table aligns with reference column starts (row # ≈ 52.7 pt). */
-const TABLE_LEFT = 28
-const TABLE_RIGHT_INSET = 28
-const BOTTOM_SAFE = 56
-const CELL_PAD = 6
-const CONTACT_LINE_GAP = 14
-const LOGO_TARGET_HEIGHT = 74
-const FRAME_STROKE = 1.1
-const GRID_STROKE = 0.9
 
-/** Line-item row height measured from reference PDF (15.75 pt). */
-const BODY_ROW_H = 15.75
-/** Body / line-item font size (reference glyph height ≈ 10.7 pt → 9 pt). */
+/**
+ * Layout measured proportionally from reference quotation (A4 @ 595×842 pt).
+ * Outer border inset ≈ 5.7% of page width → 34 pt.
+ */
+const BORDER_INSET = 34
+const CONTENT_LEFT = BORDER_INSET
+const CONTENT_RIGHT = A4_W - BORDER_INSET
+const CONTENT_WIDTH = CONTENT_RIGHT - CONTENT_LEFT
+const CONTENT_TOP = A4_H - BORDER_INSET
+const CONTENT_BOTTOM = BORDER_INSET
+const BOTTOM_SAFE = CONTENT_BOTTOM + 28
+
+const OUTER_BORDER_STROKE = 1
+const GRID_STROKE = 0.75
+
+const BLACK = rgb(0, 0, 0)
+/** Reference purple (#5C2D82). */
+const PURPLE = rgb(0.361, 0.176, 0.51)
+const GRAY_HEADER = rgb(0.902, 0.902, 0.918)
+const GROUP_BG = rgb(0.878, 0.859, 0.918)
+const RED = rgb(0.82, 0.1, 0.1)
+
+const LOGO_TARGET_HEIGHT = 70
+const CONTACT_FONT_SIZE = 8
+const CONTACT_LINE_GAP = 11
+
+const CUSTOMER_ROW_H = 20
+const CUSTOMER_GRID_H = CUSTOMER_ROW_H * 3
+const CUSTOMER_LABEL_X = CONTENT_LEFT + 4
+const CUSTOMER_VALUE_X = CONTENT_LEFT + 44
+const CUSTOMER_DATE_LABEL_X = CONTENT_LEFT + CONTENT_WIDTH / 2 + 38
+const CUSTOMER_DATE_VALUE_X = CONTENT_LEFT + CONTENT_WIDTH / 2 + 67
+
+const TITLE_SIZE = 12
+const TITLE_GAP_BELOW = 12
+
+/** Column widths scaled to CONTENT_WIDTH (reference proportions). */
+const COL_WIDTHS = [33, 124, 80, 34, 54, 124, 78]
+const TABLE_LEFT = CONTENT_LEFT
+const TABLE_WIDTH = CONTENT_WIDTH
+
+const TABLE_HEADER_H = 24
+const BODY_ROW_H = 15
+const GROUP_ROW_H = 15
 const BODY_FONT_SIZE = 9
 const TABLE_HEADER_FONT_SIZE = 8
-/** Left edge of # column text (reference ≈ 52.7 pt; TABLE_LEFT + this). */
-const IDX_TEXT_INSET = 5
-/** Left inset for LOCATION / TYPE / FABRIC header labels. */
-const HDR_LABEL_INSET = 2
+const CELL_PAD = 4
+const TOTALS_LINE_H = 14
 
-/** Baseline Y to visually centre single-line text in a row of height `rowH` (PDF y increases upward). */
+type StdFonts = {
+  font: PDFFont
+  fontBold: PDFFont
+  fontOblique: PDFFont
+}
+
+type QuoteRow = {
+  index: number
+  location: string
+  type: string
+  inOut: string
+  boSheer: string
+  fabric: string
+  price: string
+  kind: 'blockout' | 'screen'
+}
+
+type PdfLayoutContext = {
+  fonts: StdFonts
+  logoImage: Awaited<ReturnType<PDFDocument['embedPng']>>
+  logoDims: { width: number; height: number }
+  colW: number[]
+  quote: NonNullable<Awaited<ReturnType<typeof quoteRepository.findById>>>
+  customer: Awaited<ReturnType<typeof customerRepository.findById>>
+}
+
 function cellBaselineY(topY: number, rowH: number, fontSize: number): number {
   return topY - rowH / 2 - fontSize * 0.31
 }
 
-type StdFonts = {
-  font: Awaited<ReturnType<PDFDocument['embedFont']>>
-  fontBold: Awaited<ReturnType<PDFDocument['embedFont']>>
-  fontOblique: Awaited<ReturnType<PDFDocument['embedFont']>>
+function fmtMoney(v: number): string {
+  return v.toLocaleString('en-AU', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+}
+
+function formatMoneyDisplay(amount: number): string {
+  return `$ ${fmtMoney(amount)}`
 }
 
 function readFontFile(p: string | undefined): Uint8Array | null {
@@ -80,9 +128,6 @@ function readFontFile(p: string | undefined): Uint8Array | null {
   return null
 }
 
-/**
- * Prefer Arial (or paths in env) so metrics match the reference Word/PDF quotation; fall back to Helvetica on Linux CI.
- */
 async function embedQuoteFonts(pdfDoc: PDFDocument): Promise<StdFonts> {
   const winFonts = process.env.SYSTEMROOT || 'C:\\Windows'
   const regular =
@@ -112,10 +157,6 @@ async function embedQuoteFonts(pdfDoc: PDFDocument): Promise<StdFonts> {
   }
 }
 
-function fmtMoney(v: number): string {
-  return v.toLocaleString('en-AU', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
-}
-
 function lineKind(productName: string): 'blockout' | 'screen' {
   const n = productName.toLowerCase()
   if (
@@ -139,13 +180,482 @@ function fabricLabel(
   return '—'
 }
 
-function wrapLines(
+function clipToWidth(text: string, maxWidth: number, size: number, font: PDFFont): string {
+  const value = String(text || '').trim()
+  if (!value) return '—'
+  if (font.widthOfTextAtSize(value, size) <= maxWidth) return value
+  let out = value
+  while (out.length > 1 && font.widthOfTextAtSize(out + '…', size) > maxWidth) {
+    out = out.slice(0, -1)
+  }
+  return out + '…'
+}
+
+function drawOuterBorder(page: PDFPage): void {
+  page.drawRectangle({
+    x: BORDER_INSET,
+    y: BORDER_INSET,
+    width: A4_W - 2 * BORDER_INSET,
+    height: A4_H - 2 * BORDER_INSET,
+    borderColor: BLACK,
+    borderWidth: OUTER_BORDER_STROKE,
+  })
+}
+
+function drawCenteredInCell(
+  page: PDFPage,
   text: string,
-  maxWidth: number,
+  cellX: number,
+  cellW: number,
+  topY: number,
+  rowHeight: number,
   size: number,
-  font: StdFonts['font'],
-  maxLines = 10
-): string[] {
+  f: PDFFont
+): void {
+  const tw = f.widthOfTextAtSize(text, size)
+  const x = cellX + Math.max(CELL_PAD, (cellW - tw) / 2)
+  const y = cellBaselineY(topY, rowHeight, size)
+  page.drawText(text, { x, y, size, font: f, color: BLACK })
+}
+
+function drawPriceInCell(
+  page: PDFPage,
+  amount: string,
+  cellX: number,
+  cellW: number,
+  topY: number,
+  rowHeight: number,
+  size: number,
+  f: PDFFont
+): void {
+  const sym = '$'
+  const y = cellBaselineY(topY, rowHeight, size)
+  const symW = f.widthOfTextAtSize(sym, size)
+  const amtW = f.widthOfTextAtSize(amount, size)
+  const rightEdge = cellX + cellW - CELL_PAD
+  page.drawText(sym, { x: cellX + CELL_PAD, y, size, font: f, color: BLACK })
+  page.drawText(amount, { x: rightEdge - amtW, y, size, font: f, color: BLACK })
+}
+
+function drawHeader(ctx: PdfLayoutContext, page: PDFPage, yStart: number): number {
+  const { fonts, logoImage, logoDims } = ctx
+  const { font, fontBold } = fonts
+  let y = yStart
+
+  page.drawImage(logoImage, {
+    x: CONTENT_LEFT,
+    y: y - logoDims.height,
+    width: logoDims.width,
+    height: logoDims.height,
+  })
+
+  const contactLines = [
+    COMPANY.legalName,
+    COMPANY.phone,
+    COMPANY.email,
+    COMPANY.facebook,
+    COMPANY.website,
+    COMPANY.abn,
+  ]
+  let cy = y
+  for (const line of contactLines) {
+    const isLegalName = line === COMPANY.legalName
+    const lineFont = isLegalName ? fontBold : font
+    const tw = lineFont.widthOfTextAtSize(line, CONTACT_FONT_SIZE)
+    page.drawText(line, {
+      x: CONTENT_RIGHT - tw,
+      y: cy,
+      size: CONTACT_FONT_SIZE,
+      font: lineFont,
+      color: BLACK,
+    })
+    cy -= CONTACT_LINE_GAP
+  }
+
+  const headerBottom = Math.min(y - logoDims.height, cy) - 6
+  return headerBottom
+}
+
+function drawCustomerBox(ctx: PdfLayoutContext, page: PDFPage, y: number): number {
+  const { fonts, quote, customer } = ctx
+  const { font, fontBold } = fonts
+  const customerName = customer?.name ?? '—'
+  const customerAddress = customer?.address ?? '—'
+  const customerEmail = customer?.email ?? '—'
+  const quoteDate = new Date(quote.created_at).toLocaleDateString('en-AU', {
+    day: 'numeric',
+    month: 'numeric',
+    year: 'numeric',
+  })
+
+  const midX = TABLE_LEFT + TABLE_WIDTH / 2
+  const nameMaxW = midX - CUSTOMER_VALUE_X - 6
+  const addrMaxW = midX - CUSTOMER_VALUE_X - 6
+  const emailMaxW = TABLE_WIDTH - (CUSTOMER_VALUE_X - TABLE_LEFT) - 6
+  const labelSize = 10
+  const valueSize = 10
+
+  page.drawRectangle({
+    x: TABLE_LEFT,
+    y: y - CUSTOMER_GRID_H,
+    width: TABLE_WIDTH,
+    height: CUSTOMER_GRID_H,
+    borderColor: BLACK,
+    borderWidth: GRID_STROKE,
+  })
+  page.drawLine({
+    start: { x: midX, y },
+    end: { x: midX, y: y - CUSTOMER_GRID_H },
+    thickness: GRID_STROKE,
+    color: BLACK,
+  })
+  page.drawLine({
+    start: { x: TABLE_LEFT, y: y - CUSTOMER_ROW_H },
+    end: { x: TABLE_LEFT + TABLE_WIDTH, y: y - CUSTOMER_ROW_H },
+    thickness: GRID_STROKE,
+    color: BLACK,
+  })
+  page.drawLine({
+    start: { x: TABLE_LEFT, y: y - CUSTOMER_ROW_H * 2 },
+    end: { x: TABLE_LEFT + TABLE_WIDTH, y: y - CUSTOMER_ROW_H * 2 },
+    thickness: GRID_STROKE,
+    color: BLACK,
+  })
+
+  const row1Y = y - 14
+  page.drawText('Name', { x: CUSTOMER_LABEL_X, y: row1Y, size: labelSize, font: fontBold, color: BLACK })
+  page.drawText(clipToWidth(customerName, nameMaxW, valueSize, font), {
+    x: CUSTOMER_VALUE_X,
+    y: row1Y,
+    size: valueSize,
+    font,
+    color: BLACK,
+  })
+  page.drawText('Date:', { x: CUSTOMER_DATE_LABEL_X, y: row1Y, size: labelSize, font: fontBold, color: BLACK })
+  page.drawText(quoteDate, { x: CUSTOMER_DATE_VALUE_X, y: row1Y, size: valueSize, font, color: BLACK })
+
+  const row2Y = y - CUSTOMER_ROW_H - 14
+  page.drawText('Add', { x: CUSTOMER_LABEL_X, y: row2Y, size: labelSize, font: fontBold, color: BLACK })
+  page.drawText(clipToWidth(customerAddress, addrMaxW, valueSize, font), {
+    x: CUSTOMER_VALUE_X,
+    y: row2Y,
+    size: valueSize,
+    font,
+    color: BLACK,
+  })
+  page.drawText('Quote No:', { x: CONTENT_LEFT + TABLE_WIDTH / 2 + 15, y: row2Y, size: labelSize, font: fontBold, color: BLACK })
+  page.drawText(quote.quote_number, {
+    x: CUSTOMER_DATE_VALUE_X,
+    y: row2Y,
+    size: 11,
+    font: fontBold,
+    color: PURPLE,
+  })
+
+  const row3Y = y - CUSTOMER_ROW_H * 2 - 14
+  page.drawText('Email', { x: CUSTOMER_LABEL_X, y: row3Y, size: labelSize, font: fontBold, color: BLACK })
+  page.drawText(clipToWidth(customerEmail, emailMaxW, valueSize, font), {
+    x: CUSTOMER_VALUE_X,
+    y: row3Y,
+    size: valueSize,
+    font,
+    color: BLACK,
+  })
+
+  return y - CUSTOMER_GRID_H - 8
+}
+
+function drawQuotationTitle(ctx: PdfLayoutContext, page: PDFPage, y: number): number {
+  const title = 'QUOTATION FOR ROLLER BLINDS'
+  const tw = ctx.fonts.fontBold.widthOfTextAtSize(title, TITLE_SIZE)
+  const x = (A4_W - tw) / 2
+  const textY = y - 4
+  page.drawText(title, {
+    x,
+    y: textY,
+    size: TITLE_SIZE,
+    font: ctx.fonts.fontBold,
+    color: PURPLE,
+  })
+  page.drawLine({
+    start: { x, y: textY - 2 },
+    end: { x: x + tw, y: textY - 2 },
+    thickness: 0.75,
+    color: PURPLE,
+  })
+  return y - TITLE_GAP_BELOW - TITLE_SIZE
+}
+
+function drawProductTableHeader(ctx: PdfLayoutContext, page: PDFPage, topY: number): number {
+  const { fonts, colW } = ctx
+  const { fontBold } = fonts
+  const fs = TABLE_HEADER_FONT_SIZE
+  let cellX = TABLE_LEFT
+
+  colW.forEach((w, i) => {
+    page.drawRectangle({
+      x: cellX,
+      y: topY - TABLE_HEADER_H,
+      width: w,
+      height: TABLE_HEADER_H,
+      color: GRAY_HEADER,
+      borderColor: BLACK,
+      borderWidth: GRID_STROKE,
+    })
+    if (i === 3) {
+      const s1 = 'IN/'
+      const s2 = 'OUT'
+      page.drawText(s1, {
+        x: cellX + (w - fontBold.widthOfTextAtSize(s1, fs)) / 2,
+        y: topY - 8,
+        size: fs,
+        font: fontBold,
+        color: BLACK,
+      })
+      page.drawText(s2, {
+        x: cellX + (w - fontBold.widthOfTextAtSize(s2, fs)) / 2,
+        y: topY - 19,
+        size: fs,
+        font: fontBold,
+        color: BLACK,
+      })
+    } else if (i === 4) {
+      const s1 = 'BO/'
+      const s2 = 'SHEER'
+      page.drawText(s1, {
+        x: cellX + (w - fontBold.widthOfTextAtSize(s1, fs)) / 2,
+        y: topY - 8,
+        size: fs,
+        font: fontBold,
+        color: BLACK,
+      })
+      page.drawText(s2, {
+        x: cellX + (w - fontBold.widthOfTextAtSize(s2, fs)) / 2,
+        y: topY - 19,
+        size: fs,
+        font: fontBold,
+        color: BLACK,
+      })
+    } else {
+      const label = ['#', 'LOCATION', 'TYPE', '', '', 'FABRIC', 'PRICE'][i] ?? ''
+      if (label) drawCenteredInCell(page, label, cellX, w, topY, TABLE_HEADER_H, fs, fontBold)
+    }
+    cellX += w
+  })
+  return topY - TABLE_HEADER_H
+}
+
+function drawGroupSection(ctx: PdfLayoutContext, page: PDFPage, topY: number, title: string): number {
+  page.drawRectangle({
+    x: TABLE_LEFT,
+    y: topY - GROUP_ROW_H,
+    width: TABLE_WIDTH,
+    height: GROUP_ROW_H,
+    color: GROUP_BG,
+    borderColor: BLACK,
+    borderWidth: GRID_STROKE,
+  })
+  const tw = ctx.fonts.fontBold.widthOfTextAtSize(title, 9)
+  page.drawText(title, {
+    x: TABLE_LEFT + (TABLE_WIDTH - tw) / 2,
+    y: cellBaselineY(topY, GROUP_ROW_H, 9),
+    size: 9,
+    font: ctx.fonts.fontBold,
+    color: BLACK,
+  })
+  return topY - GROUP_ROW_H
+}
+
+function drawProductDataRow(ctx: PdfLayoutContext, page: PDFPage, topY: number, row: QuoteRow): number {
+  const { fonts, colW } = ctx
+  const { font } = fonts
+  const fs = BODY_FONT_SIZE
+  let cellX = TABLE_LEFT
+
+  colW.forEach((w) => {
+    page.drawRectangle({
+      x: cellX,
+      y: topY - BODY_ROW_H,
+      width: w,
+      height: BODY_ROW_H,
+      borderColor: BLACK,
+      borderWidth: GRID_STROKE,
+    })
+    cellX += w
+  })
+
+  const locMax = 22
+  const typeMax = 12
+  const fabMax = 20
+  const texts = [
+    String(row.index),
+    row.location.length > locMax ? row.location.slice(0, locMax - 1) + '…' : row.location,
+    row.type.length > typeMax ? row.type.slice(0, typeMax - 1) + '…' : row.type,
+    row.inOut,
+    row.boSheer,
+    row.fabric.length > fabMax ? row.fabric.slice(0, fabMax - 1) + '…' : row.fabric,
+  ]
+
+  cellX = TABLE_LEFT
+  for (let i = 0; i < 6; i += 1) {
+    drawCenteredInCell(page, texts[i], cellX, colW[i], topY, BODY_ROW_H, fs, font)
+    cellX += colW[i]
+  }
+  drawPriceInCell(page, row.price, cellX, colW[6], topY, BODY_ROW_H, fs, font)
+  return topY - BODY_ROW_H
+}
+
+function drawTotals(ctx: PdfLayoutContext, page: PDFPage, y: number): number {
+  const { fonts, colW, quote } = ctx
+  const { font, fontBold } = fonts
+  const fs = 9
+  const priceColLeft = TABLE_LEFT + colW.slice(0, 6).reduce((a, b) => a + b, 0)
+  const priceColRight = TABLE_LEFT + TABLE_WIDTH
+  const labelRight = priceColLeft - 8
+  let ty = y - 8
+
+  const subLabel = 'Sub Total'
+  const subAmt = formatMoneyDisplay(Number(quote.subtotal))
+  page.drawText(subLabel, {
+    x: labelRight - font.widthOfTextAtSize(subLabel, fs),
+    y: ty,
+    size: fs,
+    font,
+    color: BLACK,
+  })
+  page.drawText(subAmt, {
+    x: priceColRight - font.widthOfTextAtSize(subAmt, fs) - CELL_PAD,
+    y: ty,
+    size: fs,
+    font,
+    color: BLACK,
+  })
+  ty -= TOTALS_LINE_H
+
+  const gstLabel = '10% GST'
+  const gstAmt = formatMoneyDisplay(Number(quote.gst))
+  page.drawText(gstLabel, {
+    x: labelRight - font.widthOfTextAtSize(gstLabel, fs),
+    y: ty,
+    size: fs,
+    font,
+    color: BLACK,
+  })
+  page.drawText(gstAmt, {
+    x: priceColRight - font.widthOfTextAtSize(gstAmt, fs) - CELL_PAD,
+    y: ty,
+    size: fs,
+    font,
+    color: BLACK,
+  })
+  ty -= TOTALS_LINE_H
+
+  const totalLabel = 'Total Payable'
+  const totalAmt = formatMoneyDisplay(Number(quote.final_total))
+  page.drawText(totalLabel, {
+    x: labelRight - fontBold.widthOfTextAtSize(totalLabel, fs),
+    y: ty,
+    size: fs,
+    font: fontBold,
+    color: BLACK,
+  })
+  page.drawText(totalAmt, {
+    x: priceColRight - fontBold.widthOfTextAtSize(totalAmt, fs) - CELL_PAD,
+    y: ty,
+    size: fs,
+    font: fontBold,
+    color: BLACK,
+  })
+  return ty - 12
+}
+
+function drawPaymentSection(
+  ctx: PdfLayoutContext,
+  page: PDFPage,
+  y: number,
+  advance: number,
+  balance: number
+): number {
+  const { fonts } = ctx
+  const { font, fontBold } = fonts
+  const payRowH = 22
+  const amountColW = 108
+  const amountX = TABLE_LEFT + TABLE_WIDTH - amountColW
+  const labelPad = 8
+
+  const paymentRows = [
+    {
+      label: 'Advance Payment',
+      amount: formatMoneyDisplay(advance),
+      labelSize: 9,
+      amtSize: 9,
+      amtBold: false,
+      amtRed: false,
+    },
+    {
+      label: 'Balance to be paid upon completion of the job',
+      amount: formatMoneyDisplay(balance),
+      labelSize: 8,
+      amtSize: 10,
+      amtBold: true,
+      amtRed: true,
+    },
+  ] as const
+
+  let rowTop = y
+  for (const row of paymentRows) {
+    page.drawRectangle({
+      x: TABLE_LEFT,
+      y: rowTop - payRowH,
+      width: TABLE_WIDTH,
+      height: payRowH,
+      borderColor: BLACK,
+      borderWidth: GRID_STROKE,
+    })
+    page.drawLine({
+      start: { x: amountX, y: rowTop },
+      end: { x: amountX, y: rowTop - payRowH },
+      thickness: GRID_STROKE,
+      color: BLACK,
+    })
+    const textY = rowTop - 15
+    page.drawText(row.label, {
+      x: TABLE_LEFT + labelPad,
+      y: textY,
+      size: row.labelSize,
+      font: fontBold,
+      color: BLACK,
+    })
+    const amtFont = row.amtBold ? fontBold : font
+    const amtW = amtFont.widthOfTextAtSize(row.amount, row.amtSize)
+    page.drawText(row.amount, {
+      x: TABLE_LEFT + TABLE_WIDTH - CELL_PAD - amtW,
+      y: textY - (row.amtBold ? 1 : 0),
+      size: row.amtSize,
+      font: amtFont,
+      color: row.amtRed ? RED : BLACK,
+    })
+    rowTop -= payRowH
+  }
+
+  let cy = rowTop - 14
+  const payTerms = 'Payment Terms : Bank Transfer / Cash'
+  const ptw = font.widthOfTextAtSize(payTerms, 9)
+  page.drawText(payTerms, { x: (A4_W - ptw) / 2, y: cy, size: 9, font, color: BLACK })
+  cy -= 16
+
+  const acctLine = `Account Name : ${COMPANY.accountName}`
+  const acctW = fontBold.widthOfTextAtSize(acctLine, 9)
+  page.drawText(acctLine, { x: (A4_W - acctW) / 2, y: cy, size: 9, font: fontBold, color: BLACK })
+  cy -= 14
+
+  const bsbLine = `BSB : ${COMPANY.bsb} / Account number : ${COMPANY.accountNumber} / ${COMPANY.bankName}`
+  const bsbW = font.widthOfTextAtSize(bsbLine, 9)
+  page.drawText(bsbLine, { x: (A4_W - bsbW) / 2, y: cy, size: 9, font, color: BLACK })
+  return cy - 18
+}
+
+function wrapTextLines(text: string, maxWidth: number, size: number, font: PDFFont, maxLines = 6): string[] {
   const words = text.split(/\s+/).filter(Boolean)
   if (!words.length) return ['—']
   const lines: string[] = []
@@ -160,38 +670,100 @@ function wrapLines(
     }
   }
   if (line) lines.push(line)
-  return lines.slice(0, maxLines).map((ln) => (ln.length > 140 ? ln.slice(0, 137) + '…' : ln))
+  return lines.slice(0, maxLines)
 }
 
-function drawWrappedText(
+function drawTermsTable(
+  ctx: PdfLayoutContext,
   page: PDFPage,
-  text: string,
-  x: number,
-  yTop: number,
-  maxWidth: number,
-  size: number,
-  font: StdFonts['font'],
-  lineGap: number,
-  maxLines = 8
-): number {
-  const lines = wrapLines(text, maxWidth, size, font, maxLines)
-  let y = yTop
-  for (const ln of lines) {
-    page.drawText(ln, { x, y, size, font, color: BLACK })
-    y -= lineGap
-  }
-  return y
-}
+  y: number,
+  rows: [string, string][],
+  pdfDoc: PDFDocument
+): { page: PDFPage; y: number } {
+  const { fonts } = ctx
+  const { font, fontBold, fontOblique } = fonts
+  const termLabelW = 120
+  const termPad = 6
+  const termFont = 8
+  const lineGap = 10
+  let currentPage = page
+  let cy = y
 
-function clipToWidth(text: string, maxWidth: number, size: number, font: StdFonts['font']): string {
-  const value = String(text || '').trim()
-  if (!value) return '—'
-  if (font.widthOfTextAtSize(value, size) <= maxWidth) return value
-  let out = value
-  while (out.length > 1 && font.widthOfTextAtSize(out + '…', size) > maxWidth) {
-    out = out.slice(0, -1)
+  currentPage.drawText('Terms and conditions', {
+    x: CONTENT_LEFT,
+    y: cy,
+    size: 10,
+    font: fontBold,
+    color: BLACK,
+  })
+  cy -= 14
+
+  for (const [label, desc] of rows) {
+    const descMaxW = CONTENT_WIDTH - termLabelW - termPad * 2
+    const descLines = wrapTextLines(desc, descMaxW, termFont, font, 6)
+    const rowH = Math.max(22, 8 + descLines.length * lineGap)
+
+    if (cy - rowH < BOTTOM_SAFE + 36) {
+      currentPage = pdfDoc.addPage([A4_W, A4_H])
+      drawOuterBorder(currentPage)
+      cy = CONTENT_TOP - 8
+      currentPage.drawText('Terms and conditions (continued)', {
+        x: CONTENT_LEFT,
+        y: cy,
+        size: 10,
+        font: fontBold,
+        color: BLACK,
+      })
+      cy -= 16
+    }
+
+    currentPage.drawRectangle({
+      x: CONTENT_LEFT,
+      y: cy - rowH,
+      width: CONTENT_WIDTH,
+      height: rowH,
+      borderColor: BLACK,
+      borderWidth: GRID_STROKE,
+    })
+    currentPage.drawLine({
+      start: { x: CONTENT_LEFT + termLabelW, y: cy },
+      end: { x: CONTENT_LEFT + termLabelW, y: cy - rowH },
+      thickness: GRID_STROKE,
+      color: BLACK,
+    })
+    currentPage.drawText(label, {
+      x: CONTENT_LEFT + termPad,
+      y: cy - 12,
+      size: termFont,
+      font: fontBold,
+      color: BLACK,
+    })
+    let dy = cy - 12
+    for (const ln of descLines) {
+      currentPage.drawText(ln, {
+        x: CONTENT_LEFT + termLabelW + termPad,
+        y: dy,
+        size: termFont,
+        font,
+        color: BLACK,
+      })
+      dy -= lineGap
+    }
+    cy -= rowH
   }
-  return out + '…'
+
+  cy -= 8
+  const disclaimer =
+    'All items & materials used remain the property of SP Interior Solutions Pty Ltd until full payment is received.'
+  currentPage.drawText(disclaimer, {
+    x: CONTENT_LEFT,
+    y: Math.max(CONTENT_BOTTOM + 12, cy),
+    size: 8,
+    font: fontOblique,
+    color: BLACK,
+  })
+
+  return { page: currentPage, y: cy }
 }
 
 export async function generateQuotePdfBytes(quoteId: number): Promise<Uint8Array> {
@@ -207,18 +779,7 @@ export async function generateQuotePdfBytes(quoteId: number): Promise<Uint8Array
     quoteItemRepository.listByQuoteId(quote.id),
   ])
 
-  type Row = {
-    index: number
-    location: string
-    type: string
-    inOut: string
-    boSheer: string
-    fabric: string
-    price: string
-    kind: 'blockout' | 'screen'
-  }
-
-  let rows: Row[] = []
+  let rows: QuoteRow[] = []
   if (items && items.length > 0) {
     const productMap = new Map<number, Awaited<ReturnType<typeof productRepository.findById>>>()
     const fabricMap = new Map<number, Awaited<ReturnType<typeof fabricGroupRepository.findById>>>()
@@ -243,7 +804,6 @@ export async function generateQuotePdfBytes(quoteId: number): Promise<Uint8Array
       const typeText = product?.name?.includes('Roller') ? 'Roller Blind' : product?.name ?? 'Roller Blind'
       const kind = lineKind(product?.name ?? '')
       const boSheer = kind === 'screen' ? 'Screen' : 'BO'
-      const priceStr = fmtMoney(Number(item.subtotal))
       return {
         index: idx + 1,
         location: locationText,
@@ -251,7 +811,7 @@ export async function generateQuotePdfBytes(quoteId: number): Promise<Uint8Array
         inOut: 'IN',
         boSheer,
         fabric: fabricLabel(fabric ?? null, product ?? null),
-        price: priceStr,
+        price: fmtMoney(Number(item.subtotal)),
         kind,
       }
     })
@@ -274,17 +834,12 @@ export async function generateQuotePdfBytes(quoteId: number): Promise<Uint8Array
   const blockoutRows = rows.filter((r) => r.kind === 'blockout')
   const screenRows = rows.filter((r) => r.kind === 'screen')
   let lineNo = 1
-  for (const r of blockoutRows) {
-    r.index = lineNo++
-  }
-  for (const r of screenRows) {
-    r.index = lineNo++
-  }
+  for (const r of blockoutRows) r.index = lineNo++
+  for (const r of screenRows) r.index = lineNo++
 
   const pdfDoc = await PDFDocument.create()
-  // Required by pdf-lib before embedding custom TTF/OTF fonts.
   pdfDoc.registerFontkit(fontkit)
-  const { font, fontBold, fontOblique } = await embedQuoteFonts(pdfDoc)
+  const fonts = await embedQuoteFonts(pdfDoc)
 
   const logoResponse = await fetch(
     'https://spisolutions.com.au/wp-content/uploads/2025/04/spis_logo_v4.png'
@@ -294,535 +849,74 @@ export async function generateQuotePdfBytes(quoteId: number): Promise<Uint8Array
   const logoScale = LOGO_TARGET_HEIGHT / logoImage.height
   const logoDims = logoImage.scale(logoScale)
 
-  /** Column widths tuned to reference PDF (text x positions from TABLE_LEFT). */
-  const colW = [40, 116, 75, 32, 49, 120, 67]
-  const tableLeft = TABLE_LEFT
-  const tableWidth = A4_W - TABLE_LEFT - TABLE_RIGHT_INSET
-  const sumColW = colW.reduce((a, b) => a + b, 0)
-  if (Math.abs(sumColW - tableWidth) > 1) {
-    colW[6] += tableWidth - sumColW
-  }
+  const colW = [...COL_WIDTHS]
+  const colSum = colW.reduce((a, b) => a + b, 0)
+  if (colSum !== TABLE_WIDTH) colW[6] += TABLE_WIDTH - colSum
 
-  const rowH = BODY_ROW_H
-  const headerRowH = 26
-  const groupRowH = 16
-
-  const drawPageHeader = (page: PDFPage, yStart: number) => {
-    let y = yStart
-    const leftX = TABLE_LEFT
-    const rightBlockW = 200
-    const rightX = A4_W - SIDE_MARGIN - rightBlockW
-    const frameTopY = y + 8
-
-    page.drawImage(logoImage, {
-      x: leftX,
-      y: y - logoDims.height,
-      width: logoDims.width,
-      height: logoDims.height,
-    })
-
-    const contactLines = [
-      COMPANY.legalName,
-      COMPANY.phone,
-      COMPANY.email,
-      COMPANY.facebook,
-      COMPANY.website,
-      COMPANY.abn,
-    ]
-    let cy = y
-    contactLines.forEach((line) => {
-      const tw = font.widthOfTextAtSize(line, 8)
-      page.drawText(line, {
-        x: rightX + (rightBlockW - tw),
-        y: cy,
-        size: 8,
-        font: line === COMPANY.legalName ? fontBold : font,
-        color: BLACK,
-      })
-      cy -= CONTACT_LINE_GAP
-    })
-
-    // Separator must sit clearly *below* both columns (avoid line through ABN / logo block)
-    const leftColumnBottom = y - logoDims.height - 34
-    const rightColumnBottom = cy - 6
-    const separatorY = Math.min(leftColumnBottom, rightColumnBottom) - 8
-    page.drawLine({
-      start: { x: TABLE_LEFT, y: frameTopY },
-      end: { x: A4_W - TABLE_RIGHT_INSET, y: frameTopY },
-      thickness: FRAME_STROKE,
-      color: BLACK,
-    })
-    page.drawLine({
-      start: { x: TABLE_LEFT, y: frameTopY },
-      end: { x: TABLE_LEFT, y: separatorY },
-      thickness: FRAME_STROKE,
-      color: BLACK,
-    })
-    page.drawLine({
-      start: { x: A4_W - TABLE_RIGHT_INSET, y: frameTopY },
-      end: { x: A4_W - TABLE_RIGHT_INSET, y: separatorY },
-      thickness: FRAME_STROKE,
-      color: BLACK,
-    })
-    page.drawLine({
-      start: { x: TABLE_LEFT, y: separatorY },
-      end: { x: A4_W - TABLE_RIGHT_INSET, y: separatorY },
-      thickness: FRAME_STROKE,
-      color: BLACK,
-    })
-    y = separatorY
-    return y
-  }
-
-  const drawCustomerGrid = (page: PDFPage, y: number) => {
-    const customerName = customer?.name ?? '—'
-    const customerAddress = customer?.address ?? '—'
-    const customerEmail = customer?.email ?? '—'
-    const quoteDate = new Date(quote.created_at).toLocaleDateString('en-AU', {
-      day: 'numeric',
-      month: 'numeric',
-      year: 'numeric',
-    })
-
-    const gridW = tableWidth
-    const midX = tableLeft + gridW / 2
-    const labelX = SIDE_MARGIN
-    const valueLeftX = tableLeft + 42
-    const pad = 0
-    const nameMaxW = midX - valueLeftX - 8
-    const addrMaxW = midX - valueLeftX - 8
-    const emailMaxW = gridW - (valueLeftX - tableLeft) - 8
-
-    const row1H = 24
-    const row2H = 24
-    const row3H = 24
-    const gridH = row1H + row2H + row3H
-
-    page.drawRectangle({
-      x: tableLeft,
-      y: y - gridH,
-      width: gridW,
-      height: gridH,
-      borderColor: BLACK,
-      borderWidth: FRAME_STROKE,
-    })
-    page.drawLine({
-      start: { x: midX, y: y },
-      end: { x: midX, y: y - gridH },
-      thickness: GRID_STROKE,
-      color: BLACK,
-    })
-    page.drawLine({
-      start: { x: tableLeft, y: y - row1H },
-      end: { x: tableLeft + gridW, y: y - row1H },
-      thickness: GRID_STROKE,
-      color: BLACK,
-    })
-    page.drawLine({
-      start: { x: tableLeft, y: y - row1H - row2H },
-      end: { x: tableLeft + gridW, y: y - row1H - row2H },
-      thickness: GRID_STROKE,
-      color: BLACK,
-    })
-
-    const row1TextY = y - 16
-    page.drawText('Name', { x: labelX, y: row1TextY, size: 10, font: fontBold, color: BLACK })
-    page.drawText(clipToWidth(customerName, nameMaxW, 10, font), {
-      x: valueLeftX,
-      y: row1TextY,
-      size: 10,
-      font,
-      color: BLACK,
-    })
-    page.drawText('Date:', { x: midX + 40, y: row1TextY, size: 10, font: fontBold, color: BLACK })
-    page.drawText(quoteDate, { x: midX + 69, y: row1TextY, size: 10, font, color: BLACK })
-
-    const addrLabelY = y - row1H - 16
-    page.drawText('Add', { x: labelX, y: addrLabelY, size: 10, font: fontBold, color: BLACK })
-    page.drawText(clipToWidth(customerAddress, addrMaxW, 10, font), {
-      x: valueLeftX,
-      y: addrLabelY,
-      size: 10,
-      font,
-      color: BLACK,
-    })
-    page.drawText('Quote No:', { x: midX + 17, y: addrLabelY, size: 10, font: fontBold, color: BLACK })
-    page.drawText(quote.quote_number, {
-      x: midX + 69,
-      y: addrLabelY,
-      size: 11,
-      font: fontBold,
-      color: PURPLE,
-    })
-
-    const emailRowTop = y - row1H - row2H - 16
-    page.drawText('Email', { x: labelX, y: emailRowTop, size: 10, font: fontBold, color: BLACK })
-    page.drawText(clipToWidth(customerEmail, emailMaxW, 10, font), {
-      x: valueLeftX,
-      y: emailRowTop,
-      size: 10,
-      font,
-      color: BLACK,
-    })
-
-    return y - gridH - 10
-  }
-
-  const drawTableHeader = (page: PDFPage, topY: number) => {
-    let cellX = tableLeft
-    const fs = TABLE_HEADER_FONT_SIZE
-    colW.forEach((w, i) => {
-      page.drawRectangle({
-        x: cellX,
-        y: topY - headerRowH,
-        width: w,
-        height: headerRowH,
-        color: GRAY_BG,
-        borderColor: BLACK,
-        borderWidth: GRID_STROKE,
-      })
-      if (i === 3) {
-        const s1 = 'IN/'
-        const s2 = 'OUT'
-        const w1 = fontBold.widthOfTextAtSize(s1, fs)
-        const w2 = fontBold.widthOfTextAtSize(s2, fs)
-        page.drawText(s1, {
-          x: cellX + (w - w1) / 2,
-          y: topY - 7,
-          size: fs,
-          font: fontBold,
-          color: BLACK,
-        })
-        page.drawText(s2, {
-          x: cellX + (w - w2) / 2,
-          y: topY - 20,
-          size: fs,
-          font: fontBold,
-          color: BLACK,
-        })
-      } else if (i === 4) {
-        const s1 = 'BO/'
-        const s2 = 'SHEER'
-        const w1 = fontBold.widthOfTextAtSize(s1, fs)
-        const w2 = fontBold.widthOfTextAtSize(s2, fs)
-        page.drawText(s1, {
-          x: cellX + (w - w1) / 2,
-          y: topY - 7,
-          size: fs,
-          font: fontBold,
-          color: BLACK,
-        })
-        page.drawText(s2, {
-          x: cellX + (w - w2) / 2,
-          y: topY - 20,
-          size: fs,
-          font: fontBold,
-          color: BLACK,
-        })
-      } else {
-        const label = ['#', 'LOCATION', 'TYPE', '', '', 'FABRIC', 'PRICE'][i] ?? ''
-        const by = cellBaselineY(topY, headerRowH, fs)
-        const tw = fontBold.widthOfTextAtSize(label, fs)
-        let lx = cellX + HDR_LABEL_INSET
-        if (i === 0) lx = cellX + IDX_TEXT_INSET
-        else if (i === 6) lx = cellX + w - tw - CELL_PAD
-        page.drawText(label, {
-          x: lx,
-          y: by,
-          size: fs,
-          font: fontBold,
-          color: BLACK,
-        })
-      }
-      cellX += w
-    })
-    return topY - headerRowH
-  }
-
-  const drawGroupBar = (page: PDFPage, topY: number, title: string) => {
-    page.drawRectangle({
-      x: tableLeft,
-      y: topY - groupRowH,
-      width: tableWidth,
-      height: groupRowH,
-      color: rgb(0.88, 0.86, 0.92),
-      borderColor: BLACK,
-      borderWidth: GRID_STROKE,
-    })
-    const tw = fontBold.widthOfTextAtSize(title, 9)
-    page.drawText(title, {
-      x: tableLeft + (tableWidth - tw) / 2,
-      y: cellBaselineY(topY, groupRowH, 9),
-      size: 9,
-      font: fontBold,
-      color: BLACK,
-    })
-    return topY - groupRowH
-  }
-
-  const drawDataRow = (page: PDFPage, topY: number, row: Row) => {
-    let cellX = tableLeft
-    const cells = [
-      String(row.index),
-      row.location,
-      row.type,
-      row.inOut,
-      row.boSheer,
-      row.fabric,
-      row.price,
-    ]
-    colW.forEach((w, i) => {
-      page.drawRectangle({
-        x: cellX,
-        y: topY - rowH,
-        width: w,
-        height: rowH,
-        borderColor: BLACK,
-        borderWidth: GRID_STROKE,
-      })
-      cellX += w
-    })
-    cellX = tableLeft
-    const fs = BODY_FONT_SIZE
-    const by = cellBaselineY(topY, rowH, fs)
-    const locMax = 24
-    const typeMax = 13
-    const fabMax = 22
-    page.drawText(cells[0], {
-      x: cellX + IDX_TEXT_INSET,
-      y: by,
-      size: fs,
-      font,
-      color: BLACK,
-    })
-    cellX += colW[0]
-    const loc =
-      cells[1].length > locMax ? cells[1].slice(0, locMax - 1) + '…' : cells[1]
-    page.drawText(loc, { x: cellX + 2, y: by, size: fs, font, color: BLACK })
-    cellX += colW[1]
-    const typ =
-      cells[2].length > typeMax ? cells[2].slice(0, typeMax - 1) + '…' : cells[2]
-    page.drawText(typ, { x: cellX + 2, y: by, size: fs, font, color: BLACK })
-    cellX += colW[2]
-    const inOutW = font.widthOfTextAtSize(cells[3], fs)
-    page.drawText(cells[3], {
-      x: cellX + (colW[3] - inOutW) / 2,
-      y: by,
-      size: fs,
-      font,
-      color: BLACK,
-    })
-    cellX += colW[3]
-    const boW = font.widthOfTextAtSize(cells[4], fs)
-    page.drawText(cells[4], {
-      x: cellX + (colW[4] - boW) / 2,
-      y: by,
-      size: fs,
-      font,
-      color: BLACK,
-    })
-    cellX += colW[4]
-    const fab =
-      cells[5].length > fabMax ? cells[5].slice(0, fabMax - 1) + '…' : cells[5]
-    page.drawText(fab, { x: cellX + 2, y: by, size: fs, font, color: BLACK })
-    cellX += colW[5]
-    const amt = cells[6]
-    const sym = '-$ '
-    const rightEdge = cellX + colW[6] - CELL_PAD
-    const amtW = font.widthOfTextAtSize(amt, fs)
-    const symW = font.widthOfTextAtSize(sym, fs)
-    page.drawText(amt, { x: rightEdge - amtW, y: by, size: fs, font, color: BLACK })
-    page.drawText(sym, { x: rightEdge - amtW - symW, y: by, size: fs, font, color: BLACK })
-    return topY - rowH
-  }
-
-  const drawTotalsBlock = (page: PDFPage, y: number) => {
-    const totalPreGst = Number(quote.subtotal)
-    const gstVal = Number(quote.gst)
-    const totalPayable = Number(quote.final_total)
-    const lineH = 14
-    const rightX = tableLeft + tableWidth
-    let ty = y - 10
-    const fs = 9
-
-    const line1 = `Sub Total -$ ${fmtMoney(totalPreGst)}`
-    page.drawText(line1, {
-      x: rightX - font.widthOfTextAtSize(line1, fs),
-      y: ty,
-      size: fs,
-      font,
-      color: BLACK,
-    })
-    ty -= lineH
-
-    const gstLabel = '10% GST'
-    const gstAmt = fmtMoney(gstVal)
-    const gstAmtW = font.widthOfTextAtSize(gstAmt, fs)
-    const gstLabW = font.widthOfTextAtSize(gstLabel, fs)
-    page.drawText(gstAmt, {
-      x: rightX - gstAmtW,
-      y: ty,
-      size: fs,
-      font,
-      color: BLACK,
-    })
-    page.drawText(gstLabel, {
-      x: rightX - gstAmtW - 6 - gstLabW,
-      y: ty,
-      size: fs,
-      font,
-      color: BLACK,
-    })
-    ty -= lineH
-
-    const line3 = `Total Payable -$ ${fmtMoney(totalPayable)}`
-    page.drawText(line3, {
-      x: rightX - fontBold.widthOfTextAtSize(line3, fs),
-      y: ty,
-      size: fs,
-      font: fontBold,
-      color: BLACK,
-    })
-    return ty - 16
+  const ctx: PdfLayoutContext = {
+    fonts,
+    logoImage,
+    logoDims,
+    colW,
+    quote,
+    customer,
   }
 
   // ——— Page 1 ———
   let page = pdfDoc.addPage([A4_W, A4_H])
-  let y = A4_H - TOP_MARGIN
+  drawOuterBorder(page)
+  let y = CONTENT_TOP - 6
 
-  y = drawPageHeader(page, y)
-  y = drawCustomerGrid(page, y)
-
-  const title = 'QUOTATION FOR ROLLER BLINDS'
-  const titleSize = 12
-  const tw = fontBold.widthOfTextAtSize(title, titleSize)
-  page.drawText(title, {
-    x: (A4_W - tw) / 2,
-    y: y - 6,
-    size: titleSize,
-    font: fontBold,
-    color: PURPLE,
-  })
-  y -= 24
+  y = drawHeader(ctx, page, y)
+  y = drawCustomerBox(ctx, page, y)
+  y = drawQuotationTitle(ctx, page, y)
 
   const ensureSpace = (need: number): void => {
     if (y - need < BOTTOM_SAFE) {
       page = pdfDoc.addPage([A4_W, A4_H])
-      y = A4_H - TOP_MARGIN
-      y = drawPageHeader(page, y)
-      y -= 8
+      drawOuterBorder(page)
+      y = CONTENT_TOP - 6
+      y = drawHeader(ctx, page, y)
+      y -= 6
       page.drawText('(continued)', {
-        x: SIDE_MARGIN,
+        x: CONTENT_LEFT,
         y,
         size: 8,
-        font: fontOblique,
+        font: fonts.fontOblique,
         color: BLACK,
       })
-      y -= 18
-      y = drawTableHeader(page, y)
+      y -= 16
+      y = drawProductTableHeader(ctx, page, y)
     }
   }
 
-  y = drawTableHeader(page, y)
+  y = drawProductTableHeader(ctx, page, y)
 
-  const drawSection = (sectionTitle: string, sectionRows: Row[]) => {
+  const drawSection = (sectionTitle: string, sectionRows: QuoteRow[]) => {
     if (sectionRows.length === 0) return
-    ensureSpace(groupRowH + headerRowH)
-    y = drawGroupBar(page, y, sectionTitle)
+    ensureSpace(GROUP_ROW_H + BODY_ROW_H)
+    y = drawGroupSection(ctx, page, y, sectionTitle)
     for (const row of sectionRows) {
-      ensureSpace(rowH + 2)
-      y = drawDataRow(page, y, row)
+      ensureSpace(BODY_ROW_H + 2)
+      y = drawProductDataRow(ctx, page, y, row)
     }
   }
 
   drawSection('BLOCKOUT BLINDS', blockoutRows)
   drawSection('SCREEN BLINDS', screenRows)
 
-  ensureSpace(120)
-  y = drawTotalsBlock(page, y)
+  ensureSpace(56)
+  y = drawTotals(ctx, page, y)
 
   // ——— Page 2 ———
   page = pdfDoc.addPage([A4_W, A4_H])
-  y = A4_H - TOP_MARGIN
+  drawOuterBorder(page)
+  y = CONTENT_TOP - 6
 
   const totalPayable = Number(quote.final_total)
   const advance = totalPayable * 0.5
   const balance = totalPayable - advance
-  const payBoxW = tableWidth
-  const payRight = TABLE_LEFT + payBoxW - 8
-  const payRowH = 22
-
-  page.drawRectangle({
-    x: TABLE_LEFT,
-    y: y - payRowH,
-    width: payBoxW,
-    height: payRowH,
-    borderColor: BLACK,
-    borderWidth: GRID_STROKE,
-  })
-  const advLabel = 'Advance Payment'
-  const advVal = `$ ${fmtMoney(advance)}`
-  const advValW = font.widthOfTextAtSize(advVal, 9)
-  const advLabW = fontBold.widthOfTextAtSize(advLabel, 9)
-  page.drawText(advVal, {
-    x: payRight - advValW,
-    y: y - 15,
-    size: 9,
-    font,
-    color: BLACK,
-  })
-  page.drawText(advLabel, {
-    x: payRight - advValW - 12 - advLabW,
-    y: y - 15,
-    size: 9,
-    font: fontBold,
-    color: BLACK,
-  })
-  y -= payRowH
-
-  page.drawRectangle({
-    x: TABLE_LEFT,
-    y: y - payRowH,
-    width: payBoxW,
-    height: payRowH,
-    borderColor: BLACK,
-    borderWidth: GRID_STROKE,
-  })
-  const balPrefix = 'Balance to be paid upon completion of the job -$ '
-  const balAmt = fmtMoney(balance)
-  const balAmtW = fontBold.widthOfTextAtSize(balAmt, 10)
-  const balPrefixW = fontBold.widthOfTextAtSize(balPrefix, 8)
-  const balStart = payRight - balPrefixW - balAmtW
-  page.drawText(balPrefix, {
-    x: balStart,
-    y: y - 15,
-    size: 8,
-    font: fontBold,
-    color: BLACK,
-  })
-  page.drawText(balAmt, {
-    x: balStart + balPrefixW,
-    y: y - 16,
-    size: 10,
-    font: fontBold,
-    color: RED,
-  })
-  y -= payRowH + 14
-
-  const payTerms = 'Payment Terms : Bank Transfer / Cash'
-  const ptw = font.widthOfTextAtSize(payTerms, 9)
-  page.drawText(payTerms, { x: (A4_W - ptw) / 2, y, size: 9, font, color: BLACK })
-  y -= 16
-
-  const acctLine = `Account Name : ${COMPANY.accountName}`
-  const acctW = fontBold.widthOfTextAtSize(acctLine, 9)
-  page.drawText(acctLine, { x: (A4_W - acctW) / 2, y, size: 9, font: fontBold, color: BLACK })
-  y -= 14
-
-  const bsbLine = `BSB : ${COMPANY.bsb} / Account number : ${COMPANY.accountNumber} / ${COMPANY.bankName}`
-  const bsbW = font.widthOfTextAtSize(bsbLine, 9)
-  page.drawText(bsbLine, { x: (A4_W - bsbW) / 2, y, size: 9, font, color: BLACK })
-  y -= 22
+  y = drawPaymentSection(ctx, page, y, advance, balance)
 
   const additionalInfoText =
     quote.additional_info && String(quote.additional_info).trim().length
@@ -837,9 +931,7 @@ export async function generateQuotePdfBytes(quoteId: number): Promise<Uint8Array
   const screenFabrics = Array.from(new Set(screenRows.map((r) => r.fabric)))
   let fabricSummary = ''
   if (blockFabrics.length) fabricSummary += `Blockout: ${blockFabrics[0]}`
-  if (screenFabrics.length) {
-    fabricSummary += (fabricSummary ? ' / ' : '') + screenFabrics[0]
-  }
+  if (screenFabrics.length) fabricSummary += (fabricSummary ? ' / ' : '') + screenFabrics[0]
   if (!fabricSummary) fabricSummary = additionalInfoText.slice(0, 120)
 
   const termsRows: [string, string][] = [
@@ -856,97 +948,7 @@ export async function generateQuotePdfBytes(quoteId: number): Promise<Uint8Array
     ['Additional information', additionalInfoText],
   ]
 
-  page.drawText('Terms and conditions', {
-    x: SIDE_MARGIN,
-    y,
-    size: 10,
-    font: fontBold,
-    color: BLACK,
-  })
-  y -= 14
-
-  const termLabelW = 118
-  const termPad = 6
-  const termFont = 8
-  const lineGap = 10
-
-  for (const [label, desc] of termsRows) {
-    const rowMinH = 22
-    const descMaxW = A4_W - 2 * SIDE_MARGIN - termLabelW - termPad * 2
-    const words = desc.split(/\s+/)
-    const descLines: string[] = []
-    let cur = ''
-    for (const w of words) {
-      const t = cur ? `${cur} ${w}` : w
-      if (font.widthOfTextAtSize(t, termFont) <= descMaxW) cur = t
-      else {
-        if (cur) descLines.push(cur)
-        cur = w
-      }
-    }
-    if (cur) descLines.push(cur)
-    const clipped = descLines.slice(0, 5)
-    const rowH2 = Math.max(rowMinH, 8 + clipped.length * lineGap)
-
-    if (y - rowH2 < BOTTOM_SAFE + 40) {
-      page = pdfDoc.addPage([A4_W, A4_H])
-      y = A4_H - TOP_MARGIN
-      page.drawText('Terms and conditions (continued)', {
-        x: SIDE_MARGIN,
-        y,
-        size: 10,
-        font: fontBold,
-        color: BLACK,
-      })
-      y -= 16
-    }
-
-    page.drawRectangle({
-      x: SIDE_MARGIN,
-      y: y - rowH2,
-      width: A4_W - 2 * SIDE_MARGIN,
-      height: rowH2,
-      borderColor: BLACK,
-      borderWidth: GRID_STROKE,
-    })
-    page.drawLine({
-      start: { x: SIDE_MARGIN + termLabelW, y },
-      end: { x: SIDE_MARGIN + termLabelW, y: y - rowH2 },
-      thickness: GRID_STROKE,
-      color: BLACK,
-    })
-
-    page.drawText(label, {
-      x: SIDE_MARGIN + termPad,
-      y: y - 12,
-      size: termFont,
-      font: fontBold,
-      color: BLACK,
-    })
-    let dy = y - 12
-    for (const ln of clipped) {
-      page.drawText(ln, {
-        x: SIDE_MARGIN + termLabelW + termPad,
-        y: dy,
-        size: termFont,
-        font,
-        color: BLACK,
-      })
-      dy -= lineGap
-    }
-    y -= rowH2
-  }
-
-  y -= 10
-  const disclaimer =
-    'All items & materials used remain the property of SP Interior Solutions Pty Ltd until full payment is received.'
-  page.drawText(disclaimer, {
-    x: SIDE_MARGIN,
-    y,
-    size: 8,
-    font: fontOblique,
-    color: BLACK,
-  })
+  drawTermsTable(ctx, page, y, termsRows, pdfDoc)
 
   const pdfBytes = await pdfDoc.save()
   return new Uint8Array(pdfBytes)

@@ -84,12 +84,14 @@ export async function POST(req: NextRequest) {
     const subtotal = roundTo2(subtotals.reduce((a, b) => a + b, 0))
     const gst = roundTo2(subtotal * 0.1)
     const lineGst = allocateGstToLines(subtotals, gst)
-    const lines = linePricing.map(({ quantity }, i) => ({
+    const lines = linePricing.map(({ unit, quantity }, i) => ({
       lineNumber: i + 1,
       quantity,
       subtotal: subtotals[i],
       gst: lineGst[i],
       finalTotal: roundTo2(subtotals[i] + lineGst[i]),
+      costingBreakdown: unit.costingBreakdown,
+      unitSubtotalExGst: unit.costingBreakdown.unitSubtotalExGst,
     }))
 
     return NextResponse.json({
