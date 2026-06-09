@@ -61,7 +61,6 @@ const RED = rgb(0.82, 0.1, 0.1)
 
 const LOGO_TARGET_HEIGHT = 64
 const LOGO_URL = 'https://spisolutions.com.au/wp-content/uploads/2025/04/spis_logo_v4.png'
-const LOGO_CONTACT_GAP = 14
 const HEADER_TOP_PAD = 14
 const HEADER_BOTTOM_GAP = 10
 const CONTACT_FONT_SIZE = 8
@@ -72,7 +71,6 @@ const CONTACT_RIGHT_PAD = 10
 const AFTER_HEADER_GAP = 8
 
 const CUSTOMER_ROW_H = 20
-const CUSTOMER_GRID_H = CUSTOMER_ROW_H * 3
 const CUSTOMER_LABEL_X = CONTENT_LEFT + 4
 const CUSTOMER_VALUE_X = CONTENT_LEFT + 44
 const CUSTOMER_DATE_LABEL_X = CONTENT_LEFT + CONTENT_WIDTH / 2 + 38
@@ -283,16 +281,14 @@ function drawHeader(ctx: PdfLayoutContext, page: PDFPage, yStart: number): numbe
     height: logoDims.height,
   })
 
-  const contactRegionLeft = CONTENT_LEFT + logoDims.width + LOGO_CONTACT_GAP
-  const contactCenterX =
-    contactRegionLeft + (CONTENT_RIGHT - CONTACT_RIGHT_PAD - contactRegionLeft) / 2
+  const contactRight = CONTENT_RIGHT - CONTACT_RIGHT_PAD
   let cy = blockTop - (headerBlockH - contactBlockH) / 2
   for (const line of contactLines) {
     const isLegalName = line === COMPANY.legalName
     const lineFont = isLegalName ? fontBold : font
     const tw = lineFont.widthOfTextAtSize(line, CONTACT_FONT_SIZE)
     page.drawText(line, {
-      x: contactCenterX - tw / 2,
+      x: contactRight - tw,
       y: cy,
       size: CONTACT_FONT_SIZE,
       font: lineFont,
@@ -323,18 +319,22 @@ function drawCustomerBox(ctx: PdfLayoutContext, page: PDFPage, y: number): numbe
   const emailMaxW = TABLE_WIDTH - (CUSTOMER_VALUE_X - TABLE_LEFT) - 6
   const labelSize = 10
   const valueSize = 10
+  const addrLineGap = 11
+  const addrLines = wrapTextLines(customerAddress, addrMaxW, valueSize, font, 10)
+  const addrRowH = Math.max(CUSTOMER_ROW_H, 10 + addrLines.length * addrLineGap)
+  const gridH = CUSTOMER_ROW_H + addrRowH + CUSTOMER_ROW_H
 
   page.drawRectangle({
     x: TABLE_LEFT,
-    y: y - CUSTOMER_GRID_H,
+    y: y - gridH,
     width: TABLE_WIDTH,
-    height: CUSTOMER_GRID_H,
+    height: gridH,
     borderColor: BLACK,
     borderWidth: GRID_STROKE,
   })
   page.drawLine({
     start: { x: midX, y },
-    end: { x: midX, y: y - CUSTOMER_GRID_H },
+    end: { x: midX, y: y - gridH },
     thickness: GRID_STROKE,
     color: BLACK,
   })
@@ -345,8 +345,8 @@ function drawCustomerBox(ctx: PdfLayoutContext, page: PDFPage, y: number): numbe
     color: BLACK,
   })
   page.drawLine({
-    start: { x: TABLE_LEFT, y: y - CUSTOMER_ROW_H * 2 },
-    end: { x: TABLE_LEFT + TABLE_WIDTH, y: y - CUSTOMER_ROW_H * 2 },
+    start: { x: TABLE_LEFT, y: y - CUSTOMER_ROW_H - addrRowH },
+    end: { x: TABLE_LEFT + TABLE_WIDTH, y: y - CUSTOMER_ROW_H - addrRowH },
     thickness: GRID_STROKE,
     color: BLACK,
   })
@@ -363,25 +363,36 @@ function drawCustomerBox(ctx: PdfLayoutContext, page: PDFPage, y: number): numbe
   page.drawText('Date:', { x: CUSTOMER_DATE_LABEL_X, y: row1Y, size: labelSize, font: fontBold, color: BLACK })
   page.drawText(quoteDate, { x: CUSTOMER_DATE_VALUE_X, y: row1Y, size: valueSize, font, color: BLACK })
 
-  const row2Y = y - CUSTOMER_ROW_H - 14
-  page.drawText('Add', { x: CUSTOMER_LABEL_X, y: row2Y, size: labelSize, font: fontBold, color: BLACK })
-  page.drawText(clipToWidth(customerAddress, addrMaxW, valueSize, font), {
-    x: CUSTOMER_VALUE_X,
-    y: row2Y,
-    size: valueSize,
-    font,
+  const row2Top = y - CUSTOMER_ROW_H
+  const row2TextY = row2Top - 10
+  page.drawText('Add', { x: CUSTOMER_LABEL_X, y: row2TextY, size: labelSize, font: fontBold, color: BLACK })
+  let addrY = row2TextY
+  for (const line of addrLines) {
+    page.drawText(line, {
+      x: CUSTOMER_VALUE_X,
+      y: addrY,
+      size: valueSize,
+      font,
+      color: BLACK,
+    })
+    addrY -= addrLineGap
+  }
+  page.drawText('Quote No:', {
+    x: CONTENT_LEFT + TABLE_WIDTH / 2 + 15,
+    y: row2TextY,
+    size: labelSize,
+    font: fontBold,
     color: BLACK,
   })
-  page.drawText('Quote No:', { x: CONTENT_LEFT + TABLE_WIDTH / 2 + 15, y: row2Y, size: labelSize, font: fontBold, color: BLACK })
   page.drawText(quote.quote_number, {
     x: CUSTOMER_DATE_VALUE_X,
-    y: row2Y,
+    y: row2TextY,
     size: 11,
     font: fontBold,
     color: PURPLE,
   })
 
-  const row3Y = y - CUSTOMER_ROW_H * 2 - 14
+  const row3Y = y - CUSTOMER_ROW_H - addrRowH - 14
   page.drawText('Email', { x: CUSTOMER_LABEL_X, y: row3Y, size: labelSize, font: fontBold, color: BLACK })
   page.drawText(clipToWidth(customerEmail, emailMaxW, valueSize, font), {
     x: CUSTOMER_VALUE_X,
@@ -391,7 +402,7 @@ function drawCustomerBox(ctx: PdfLayoutContext, page: PDFPage, y: number): numbe
     color: BLACK,
   })
 
-  return y - CUSTOMER_GRID_H - 8
+  return y - gridH - 8
 }
 
 function drawQuotationTitle(ctx: PdfLayoutContext, page: PDFPage, y: number): number {
