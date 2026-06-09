@@ -7,11 +7,6 @@ import path from 'node:path'
 import {
   PDFDocument,
   StandardFonts,
-  clip,
-  endPath,
-  popGraphicsState,
-  pushGraphicsState,
-  rectangle,
   rgb,
   type PDFFont,
   type PDFPage,
@@ -64,16 +59,17 @@ const GRAY_HEADER = rgb(0.902, 0.902, 0.918)
 const GROUP_BG = rgb(0.878, 0.859, 0.918)
 const RED = rgb(0.82, 0.1, 0.1)
 
-const LOGO_TARGET_HEIGHT = 70
-/** Left purple icon only (full PNG includes text we draw separately). */
-const LOGO_ICON_SIZE = 58
-const BRAND_NAME_SIZE = 14
-const BRAND_TAGLINE_SIZE = 12
-const BRAND_TEXT_X_OFFSET = 8
+const LOGO_TARGET_HEIGHT = 64
+const LOGO_URL = 'https://spisolutions.com.au/wp-content/uploads/2025/04/spis_logo_v4.png'
+const LOGO_CONTACT_GAP = 14
+const HEADER_TOP_PAD = 14
+const HEADER_BOTTOM_GAP = 10
 const CONTACT_FONT_SIZE = 8
 const CONTACT_LINE_GAP = 11
 /** Uniform inset for right-aligned contact block (matches reference). */
 const CONTACT_RIGHT_PAD = 10
+/** Gap between header block and customer box top border */
+const AFTER_HEADER_GAP = 8
 
 const CUSTOMER_ROW_H = 20
 const CUSTOMER_GRID_H = CUSTOMER_ROW_H * 3
@@ -264,42 +260,9 @@ function drawPriceInCell(
 
 function drawHeader(ctx: PdfLayoutContext, page: PDFPage, yStart: number): number {
   const { fonts, logoImage, logoDims } = ctx
-  const { font, fontBold, fontOblique } = fonts
-  const y = yStart
-  const iconBottom = y - LOGO_ICON_SIZE
+  const { font, fontBold } = fonts
+  const blockTop = yStart - HEADER_TOP_PAD
 
-  page.pushOperators(
-    pushGraphicsState(),
-    rectangle(CONTENT_LEFT, iconBottom, LOGO_ICON_SIZE, LOGO_ICON_SIZE),
-    clip(),
-    endPath()
-  )
-  page.drawImage(logoImage, {
-    x: CONTENT_LEFT,
-    y: y - logoDims.height,
-    width: logoDims.width,
-    height: logoDims.height,
-  })
-  page.pushOperators(popGraphicsState())
-
-  const textX = CONTENT_LEFT + LOGO_ICON_SIZE + BRAND_TEXT_X_OFFSET
-  const nameY = y - 20
-  page.drawText(COMPANY.displayName, {
-    x: textX,
-    y: nameY,
-    size: BRAND_NAME_SIZE,
-    font: fontBold,
-    color: BLACK,
-  })
-  page.drawText(COMPANY.tagline, {
-    x: textX,
-    y: nameY - 15,
-    size: BRAND_TAGLINE_SIZE,
-    font: fontOblique,
-    color: PURPLE,
-  })
-
-  const contactRight = CONTENT_RIGHT - CONTACT_RIGHT_PAD
   const contactLines = [
     COMPANY.legalName,
     COMPANY.phone,
@@ -308,13 +271,28 @@ function drawHeader(ctx: PdfLayoutContext, page: PDFPage, yStart: number): numbe
     COMPANY.website,
     COMPANY.abn,
   ]
-  let cy = y
+  const contactBlockH =
+    (contactLines.length - 1) * CONTACT_LINE_GAP + CONTACT_FONT_SIZE + 2
+  const headerBlockH = Math.max(logoDims.height, contactBlockH)
+
+  const logoBottom = blockTop - (headerBlockH - logoDims.height) / 2 - logoDims.height
+  page.drawImage(logoImage, {
+    x: CONTENT_LEFT,
+    y: logoBottom,
+    width: logoDims.width,
+    height: logoDims.height,
+  })
+
+  const contactRegionLeft = CONTENT_LEFT + logoDims.width + LOGO_CONTACT_GAP
+  const contactCenterX =
+    contactRegionLeft + (CONTENT_RIGHT - CONTACT_RIGHT_PAD - contactRegionLeft) / 2
+  let cy = blockTop - (headerBlockH - contactBlockH) / 2
   for (const line of contactLines) {
     const isLegalName = line === COMPANY.legalName
     const lineFont = isLegalName ? fontBold : font
     const tw = lineFont.widthOfTextAtSize(line, CONTACT_FONT_SIZE)
     page.drawText(line, {
-      x: contactRight - tw,
+      x: contactCenterX - tw / 2,
       y: cy,
       size: CONTACT_FONT_SIZE,
       font: lineFont,
@@ -323,9 +301,8 @@ function drawHeader(ctx: PdfLayoutContext, page: PDFPage, yStart: number): numbe
     cy -= CONTACT_LINE_GAP
   }
 
-  const brandBottom = nameY - 15 - BRAND_TAGLINE_SIZE
-  const headerBottom = Math.min(iconBottom, brandBottom, cy) - 6
-  return headerBottom
+  const headerBottom = blockTop - headerBlockH
+  return headerBottom - HEADER_BOTTOM_GAP
 }
 
 function drawCustomerBox(ctx: PdfLayoutContext, page: PDFPage, y: number): number {
@@ -707,6 +684,24 @@ function drawPaymentSection(
   return cy - 18
 }
 
+function estimateTermsHeight(ctx: PdfLayoutContext, rows: [string, string][]): number {
+  const { font } = ctx.fonts
+  const termLabelW = 120
+  const termPad = 6
+  const termFont = 8
+  const lineGap = 10
+  let h = 14
+  for (const [, desc] of rows) {
+    const descMaxW = CONTENT_WIDTH - termLabelW - termPad * 2
+    const descLines = wrapTextLines(desc, descMaxW, termFont, font, 6)
+    h += Math.max(22, 8 + descLines.length * lineGap)
+  }
+  h += 8 + 20
+  return h
+}
+
+const PAYMENT_SECTION_HEIGHT = 120
+
 function wrapTextLines(text: string, maxWidth: number, size: number, font: PDFFont, maxLines = 6): string[] {
   const words = text.split(/\s+/).filter(Boolean)
   if (!words.length) return ['—']
@@ -818,6 +813,24 @@ function drawTermsTable(
   return { page: currentPage, y: cy }
 }
 
+async function loadQuoteLogoBytes(): Promise<ArrayBuffer> {
+  const url = process.env.PDF_LOGO_URL?.trim() || LOGO_URL
+  try {
+    const response = await fetch(url)
+    if (response.ok) return await response.arrayBuffer()
+  } catch {
+    /* try local fallback */
+  }
+
+  const localPath = process.env.PDF_LOGO_PATH?.trim()
+  if (localPath && fs.existsSync(localPath)) {
+    const buf = fs.readFileSync(localPath)
+    return buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength)
+  }
+
+  throw new Error(`Failed to load quote PDF logo from ${url}`)
+}
+
 export async function generateQuotePdfBytes(quoteId: number): Promise<Uint8Array> {
   const quote = await quoteRepository.findById(quoteId)
   if (!quote) {
@@ -892,10 +905,7 @@ export async function generateQuotePdfBytes(quoteId: number): Promise<Uint8Array
   pdfDoc.registerFontkit(fontkit)
   const fonts = await embedQuoteFonts(pdfDoc)
 
-  const logoResponse = await fetch(
-    'https://spisolutions.com.au/wp-content/uploads/2025/04/spis_logo_v4.png'
-  )
-  const logoArrayBuffer = await logoResponse.arrayBuffer()
+  const logoArrayBuffer = await loadQuoteLogoBytes()
   const logoImage = await pdfDoc.embedPng(logoArrayBuffer)
   const logoScale = LOGO_TARGET_HEIGHT / logoImage.height
   const logoDims = logoImage.scale(logoScale)
@@ -916,17 +926,19 @@ export async function generateQuotePdfBytes(quoteId: number): Promise<Uint8Array
   // ——— Page 1 ———
   let page = pdfDoc.addPage([A4_W, A4_H])
   drawOuterBorder(page)
-  let y = CONTENT_TOP - 6
+  let y = CONTENT_TOP
 
   y = drawHeader(ctx, page, y)
+  y -= AFTER_HEADER_GAP
   y = drawCustomerBox(ctx, page, y)
   y = drawQuotationTitle(ctx, page, y)
 
-  const ensureSpace = (need: number): void => {
-    if (y - need < BOTTOM_SAFE) {
-      page = pdfDoc.addPage([A4_W, A4_H])
-      drawOuterBorder(page)
-      y = CONTENT_TOP - 6
+  const ensureSpace = (need: number, mode: 'table' | 'footer' = 'table'): void => {
+    if (y - need >= BOTTOM_SAFE) return
+    page = pdfDoc.addPage([A4_W, A4_H])
+    drawOuterBorder(page)
+    if (mode === 'table') {
+      y = CONTENT_TOP
       y = drawHeader(ctx, page, y)
       y -= 6
       page.drawText('(continued)', {
@@ -938,6 +950,8 @@ export async function generateQuotePdfBytes(quoteId: number): Promise<Uint8Array
       })
       y -= 16
       y = drawProductTableHeader(ctx, page, y)
+    } else {
+      y = CONTENT_TOP - HEADER_TOP_PAD
     }
   }
 
@@ -958,16 +972,6 @@ export async function generateQuotePdfBytes(quoteId: number): Promise<Uint8Array
 
   ensureSpace(56)
   y = drawTotals(ctx, page, y)
-
-  // ——— Page 2 ———
-  page = pdfDoc.addPage([A4_W, A4_H])
-  drawOuterBorder(page)
-  y = CONTENT_TOP - 6
-
-  const totalPayable = Number(quote.final_total)
-  const advance = totalPayable * 0.5
-  const balance = totalPayable - advance
-  y = drawPaymentSection(ctx, page, y, advance, balance)
 
   const additionalInfoText =
     quote.additional_info && String(quote.additional_info).trim().length
@@ -999,7 +1003,16 @@ export async function generateQuotePdfBytes(quoteId: number): Promise<Uint8Array
     ['Additional information', additionalInfoText],
   ]
 
-  drawTermsTable(ctx, page, y, termsRows, pdfDoc)
+  const footerHeight = PAYMENT_SECTION_HEIGHT + estimateTermsHeight(ctx, termsRows)
+  ensureSpace(footerHeight + 12, 'footer')
+
+  const totalPayable = Number(quote.final_total)
+  const advance = totalPayable * 0.5
+  const balance = totalPayable - advance
+  y = drawPaymentSection(ctx, page, y, advance, balance)
+
+  const termsResult = drawTermsTable(ctx, page, y, termsRows, pdfDoc)
+  page = termsResult.page
 
   const pdfBytes = await pdfDoc.save()
   return new Uint8Array(pdfBytes)
