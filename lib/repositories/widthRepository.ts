@@ -34,25 +34,23 @@ export async function findById(id: number): Promise<Width | null> {
 }
 
 export async function findNearest(value: number): Promise<Width | null> {
-  const data = await dbSelect<Width[]>(TABLE, (q) =>
+  const nextHigher = await dbSelect<Width[]>(TABLE, (q) =>
     q
       .select('*')
+      .gte('width_value', value)
       .order('width_value', { ascending: true })
+      .limit(1)
   )
 
-  if (!data.length) return null
+  if (nextHigher.length) return nextHigher[0]
 
-  let nearest = data[0]
-  let minDiff = Math.abs(nearest.width_value - value)
+  const largest = await dbSelect<Width[]>(TABLE, (q) =>
+    q
+      .select('*')
+      .order('width_value', { ascending: false })
+      .limit(1)
+  )
 
-  for (const row of data) {
-    const diff = Math.abs(row.width_value - value)
-    if (diff < minDiff) {
-      minDiff = diff
-      nearest = row
-    }
-  }
-
-  return nearest
+  return largest[0] ?? null
 }
 

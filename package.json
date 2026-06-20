@@ -10,7 +10,8 @@
     "migrate": "node scripts/migrate.js",
     "export:catalog": "node scripts/export-catalog-to-sql.js",
     "verify:db": "node scripts/verify-supabase-connection.js",
-    "create:admin": "node scripts/create-admin-user.js"
+    "create:admin": "node scripts/create-admin-user.js",
+    "handover:pdf": "node scripts/generate-handover-pdf.js"
   },
   "dependencies": {
     "@pdf-lib/fontkit": "^1.1.1",

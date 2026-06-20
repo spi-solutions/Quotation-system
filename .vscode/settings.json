@@ -1,0 +1,10 @@
+{
+  "markdown-pdf.format": "A4",
+  "markdown-pdf.margin.top": "1.5cm",
+  "markdown-pdf.margin.bottom": "1.5cm",
+  "markdown-pdf.margin.right": "1.5cm",
+  "markdown-pdf.margin.left": "1.5cm",
+  "markdown-pdf.displayHeaderFooter": true,
+  "markdown-pdf.headerTemplate": "<div></div>",
+  "markdown-pdf.footerTemplate": "<div style=\"font-size:9px;text-align:center;width:100%;\"><span class=\"pageNumber\"></span> / <span class=\"totalPages\"></span></div>"
+}

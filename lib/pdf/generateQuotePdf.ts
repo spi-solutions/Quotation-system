@@ -57,7 +57,6 @@ const BLACK = rgb(0, 0, 0)
 const PURPLE = rgb(0.361, 0.176, 0.51)
 const GRAY_HEADER = rgb(0.902, 0.902, 0.918)
 const GROUP_BG = rgb(0.878, 0.859, 0.918)
-const RED = rgb(0.82, 0.1, 0.1)
 
 const LOGO_TARGET_HEIGHT = 64
 const LOGO_URL = 'https://spisolutions.com.au/wp-content/uploads/2025/04/spis_logo_v4.png'
@@ -364,7 +363,8 @@ function drawCustomerBox(ctx: PdfLayoutContext, page: PDFPage, y: number): numbe
   page.drawText(quoteDate, { x: CUSTOMER_DATE_VALUE_X, y: row1Y, size: valueSize, font, color: BLACK })
 
   const row2Top = y - CUSTOMER_ROW_H
-  const row2TextY = row2Top - 10
+  const addrBlockHeight = (addrLines.length - 1) * addrLineGap + valueSize
+  const row2TextY = row2Top - (addrRowH - addrBlockHeight) / 2 - valueSize * 0.31
   page.drawText('Add', { x: CUSTOMER_LABEL_X, y: row2TextY, size: labelSize, font: fontBold, color: BLACK })
   let addrY = row2TextY
   for (const line of addrLines) {
@@ -377,16 +377,17 @@ function drawCustomerBox(ctx: PdfLayoutContext, page: PDFPage, y: number): numbe
     })
     addrY -= addrLineGap
   }
+  const quoteNoY = cellBaselineY(row2Top, addrRowH, 11)
   page.drawText('Quote No:', {
     x: CONTENT_LEFT + TABLE_WIDTH / 2 + 15,
-    y: row2TextY,
+    y: quoteNoY,
     size: labelSize,
     font: fontBold,
     color: BLACK,
   })
   page.drawText(quote.quote_number, {
     x: CUSTOMER_DATE_VALUE_X,
-    y: row2TextY,
+    y: quoteNoY,
     size: 11,
     font: fontBold,
     color: PURPLE,
@@ -630,7 +631,6 @@ function drawPaymentSection(
       labelSize: 9,
       amtSize: 9,
       amtBold: false,
-      amtRed: false,
     },
     {
       label: 'Balance to be paid upon completion of the job',
@@ -638,7 +638,6 @@ function drawPaymentSection(
       labelSize: 8,
       amtSize: 10,
       amtBold: true,
-      amtRed: true,
     },
   ] as const
 
@@ -673,7 +672,7 @@ function drawPaymentSection(
       y: textY - (row.amtBold ? 1 : 0),
       size: row.amtSize,
       font: amtFont,
-      color: row.amtRed ? RED : BLACK,
+      color: BLACK,
     })
     rowTop -= payRowH
   }
